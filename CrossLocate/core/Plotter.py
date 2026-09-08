@@ -271,10 +271,21 @@ class Plotter(MasterPlotter):
 	def __prepareColorsAndLabelsForRecallsAtAllThresholds(self, locationThresholds):
 		_, realLabels, _, _ = self.__prepareColorsAndLabelsForRecalls()
 
+		locationThresholds = list(locationThresholds)
 		colors, labels = [], []
 		for i, locThr in enumerate(locationThresholds):
 			for recallNumber in self.recallNumbers:
-				colors.append(self.recallSpecification[recallNumber]['multiColors'][i])
+				colors.append(self.__shadeForThreshold(recallNumber, i, len(locationThresholds)))
 			labels += [label + ' at {} m'.format(locThr) for label in realLabels]
 
 		return colors, labels
+
+	def __shadeForThreshold(self, recallNumber, i, numberOfThresholds):
+		"""Ramp the 3 hand-picked shades across N thresholds; indexing them broke for N != 3."""
+		from matplotlib.colors import LinearSegmentedColormap, to_hex
+
+		shades = self.recallSpecification[recallNumber]['multiColors']
+		if (numberOfThresholds == len(shades)):
+			return shades[i]
+		position = 0.0 if (numberOfThresholds < 2) else i / (numberOfThresholds - 1)
+		return to_hex(LinearSegmentedColormap.from_list('recall', shades)(position))

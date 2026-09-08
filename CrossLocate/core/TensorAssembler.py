@@ -119,7 +119,7 @@ class TensorAssembler():
     def getDatabaseTensor(self, databaseFn):
         databaseTensor = np.ndarray(shape=(*self.dimensions, self.channels), dtype=np.float32)
 
-        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext']):
+        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth']):
             databaseImage = self.__loadExr(os.path.join(self.databasePath, databaseFn))
             databaseSample = cv2.resize(databaseImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
 

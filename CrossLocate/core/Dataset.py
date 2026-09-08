@@ -27,6 +27,7 @@ class Dataset():
 
 		Parameters:
 			positiveYawThreshold ... None for dynamic threshold, Integer for fixed threshold (in degrees)
+			negativeYawThreshold ... None to keep non-negative mining location-only (released behaviour), Integer (degrees) to also require yaw proximity
 
 		Assumptions:
 		Coordinates are in UTM format.
@@ -34,7 +35,7 @@ class Dataset():
 		Loading database place names: Database filenames contain database IDs.
 	"""
 
-	def __init__(self, name, meta, set, databasePath, queriesPath, positiveLocationThreshold, positiveYawThreshold, negativeLocationMinThreshold, datasetsMetaPath='../datasets_meta'):
+	def __init__(self, name, meta, set, databasePath, queriesPath, positiveLocationThreshold, positiveYawThreshold, negativeLocationMinThreshold, negativeYawThreshold=None, datasetsMetaPath='../datasets_meta'):
 		self.tag = 'Dataset ({})'.format(set)
 
 		self.name = name
@@ -47,6 +48,7 @@ class Dataset():
 		self.positiveLocationThreshold = positiveLocationThreshold
 		self.positiveYawThreshold = positiveYawThreshold
 		self.negativeLocationMinThreshold = negativeLocationMinThreshold
+		self.negativeYawThreshold = negativeYawThreshold
 
 		self.datasetsMetaPath = datasetsMetaPath
 		self.infoPath = '../datasets_info'
@@ -184,7 +186,8 @@ class Dataset():
 	def loadFromMetaStructs(self):
 		structsPath = os.path.join(self.datasetsMetaPath, self.name)
 		structFn = '{}_{}.npy'.format(self.meta, self.set)
-		struct = np.load(os.path.join(structsPath, structFn)).item()
+		# allow_pickle=True: numpy >=1.16.3 defaults it to False, which breaks loading these pickled meta structs
+		struct = np.load(os.path.join(structsPath, structFn), allow_pickle=True).item()
 
 		print('[{}] Loading dataset from {} ...'.format(self.tag, structFn))
 
@@ -480,6 +483,13 @@ class Dataset():
 
 		for queryID in range(len(self)):
 			nonNegativeDbIDs, _ = self.__getPositiveDbIDsByLocation(queryID, self.negativeLocationMinThreshold)
+
+			# Conjunctive yaw-aware mining (CROSSLOCATE_PLAN.md sec 7); None keeps the released location-only behaviour
+			if (self.negativeYawThreshold is not None):
+				yawDistances = self.computeYawDistances(queryID, nonNegativeDbIDs)
+				yawDistThr = radians(self.negativeYawThreshold)
+				nonNegativeDbIDs = [dbID for dbID, yawDist in zip(nonNegativeDbIDs, yawDistances) if (yawDist <= yawDistThr)]
+
 			self.nonNegativeDbIDs.append(nonNegativeDbIDs)
 
 		print('[{}] Found non-negative database IDs \t ({})'.format(self.tag, len(self.nonNegativeDbIDs)))

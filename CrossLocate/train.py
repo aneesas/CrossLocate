@@ -12,7 +12,10 @@ __copyright__ = "Copyright 2022, Jan Tomesek"
 
 
 # Properties
-experimentName = 'CrossLocate'
+# CL_EXPERIMENT / CL_PRETRAINED let run 1 and run 2 differ without editing this file; CL_PRETRAINED
+# may be 'IMAGENET', an output/<name> dir, or a checkpoint prefix path (CROSSLOCATE_PLAN.md sec 9).
+import os as _os
+experimentName = _os.environ.get('CL_EXPERIMENT', 'CrossLocate')
 tag = 'train'
 
 
@@ -33,55 +36,137 @@ from core.DatasetDescriptions import datasetAlpsCH1ToDepth, datasetAlpsCH1ToDept
 from core.DatasetDescriptions import datasetAlpsCH2ToSegments, datasetAlpsCH2ToSegmentsResolution, datasetAlpsCH2ToSegmentsExt, datasetAlpsCH2ToSegmentsExtResolution
 from core.DatasetDescriptions import datasetAlpsCH2ToSilhouettes, datasetAlpsCH2ToSilhouettesExt
 from core.DatasetDescriptions import datasetAlpsCH2ToDepth, datasetAlpsCH2ToDepthResolution, datasetAlpsCH2ToDepthExt, datasetAlpsCH2ToDepthExtResolution
+from core.DatasetDescriptions import datasetFarfieldTrainDepth, datasetFarfieldTrainSparseDepth
 from core.NetworkBuilder import Branching, Metric
 from networks.NeuralNetwork import Architecture, Pooling, FeatureNormalization
 from core.TensorAssembler import TensorFormat
 from core.TripletGenerator import MiningStrategy
 from core.Plotter import RecallType
 
-netParams = { 	'inputDimensions': (224, 224),
-			 	'branching': Branching.ONE_BRANCH,
-			 	'architecture': Architecture.VGG16,
-			 	'preFeatNorm': FeatureNormalization.L2,
-				'pooling': Pooling.MAC,
-			 	'postFeatNorm': FeatureNormalization.L2,
-			 	'pretrained': 'IMAGENET' }
+# 'released' reproduces the shipped defaults verbatim; 'farfield' trains on Charles/Harbor
+# data with the sec 7 yaw-aware mining fix (CROSSLOCATE_PLAN.md sec 7-8).
+trainingConfig = 'farfield'
 
-trainParams = { 'startEpoch': 1,
-				'endEpoch': 20,
-				'batchSize': 4,
-				'margin': 0.1,
-				'queryExtractFeatsInterval': 250,
-				'queryTensorFormat': TensorFormat.INPUT_RGB,
-				'databaseTensorFormat': TensorFormat.INPUT_RGB,
-				'metric': Metric.EUCLIDEAN }
+if (trainingConfig == 'released'):
+	netParams = { 	'inputDimensions': (224, 224),
+				 	'branching': Branching.ONE_BRANCH,
+				 	'architecture': Architecture.VGG16,
+				 	'preFeatNorm': FeatureNormalization.L2,
+					'pooling': Pooling.MAC,
+				 	'postFeatNorm': FeatureNormalization.L2,
+				 	'pretrained': 'IMAGENET' }
+
+	trainParams = { 'startEpoch': 1,
+					'endEpoch': 20,
+					'batchSize': 4,
+					'margin': 0.1,
+					'queryExtractFeatsInterval': 250,
+					'queryTensorFormat': TensorFormat.INPUT_RGB,
+					'databaseTensorFormat': TensorFormat.INPUT_RGB,
+					'metric': Metric.EUCLIDEAN }
+
+	mineParams = {  'positiveLocationThreshold': 20,
+	                'positiveYawThreshold': 15,
+	                'negativeLocationMinThreshold': 2000,
+	                'margin': 0.2,
+	                'numberOfNegatives': 10,
+	                'negativeSampleAttempts': 2,
+	                'numberOfSampledNegatives': 4000,
+	                'reusingNegatives': True,
+	                'trainMiningStrategy': MiningStrategy.SEMIHARD_AND_HARD_NEGATIVE,
+					'numberOfTrainTripletReusages': 1 }
+
+	evalParams = {	'recallNumbers' : [1, 10, 100],
+				  	'locationThresholds': [20, 100, 1000],
+				  	'locationThresholdStep': 20,
+				  	'successfulLocalizationThreshold': 20,
+				  	'yawThreshold': 30 }
+
+	datasetParams = datasetSegments
+
+elif (trainingConfig == 'farfield'):
+	# inputDimensions per sec 1c depth hyperparameters (VGG16/MAC/L2-L2/ONE_BRANCH already match released)
+	netParams = { 	'inputDimensions': (500, 500),
+				 	'branching': Branching.ONE_BRANCH,
+				 	'architecture': Architecture.VGG16,
+				 	'preFeatNorm': FeatureNormalization.L2,
+					'pooling': Pooling.MAC,
+				 	'postFeatNorm': FeatureNormalization.L2,
+				 	'pretrained': _os.environ.get('CL_PRETRAINED', 'IMAGENET') }
+
+	# batchSize/endEpoch/margin per sec 1c depth hyperparameters
+	trainParams = { 'startEpoch': int(_os.environ.get('CL_START_EPOCH', 1)),
+					# CL_END_EPOCH lets a run be extended later without editing this file; resuming
+					# with CL_START_EPOCH restores the latest checkpoint and the history.
+					'endEpoch': int(_os.environ.get('CL_END_EPOCH', 30)),
+					'batchSize': 3,
+					'margin': 0.1,
+					# Supplementary specifies this PER TRIPLET: 250 (Sparse) / 1000 (Uniform). Our query
+					# set is 6.8x theirs, so a faithful 250 costs 39 db passes/epoch (4.2 h). 1000 is
+					# the paper's own Uniform value and 1.75x fresher than the 1750 first used here.
+					'queryExtractFeatsInterval': int(_os.environ.get('CL_EXTRACT_INTERVAL', 1000)),
+					'queryTensorFormat': TensorFormat.INPUT_RGB,
+					'databaseTensorFormat': TensorFormat.INPUT_RGB,
+					'metric': Metric.EUCLIDEAN }
+
+	# Paper's Sparse values (supplementary): positives <20 m and within 15 deg, negatives >2000 m
+	# with NO yaw constraint. The earlier retune assumed a 1.7 km basin; the combined
+	# Charles+Harbor set spans 18 km, where 20 m gives 5.0 positives/query (0 starved) and
+	# 2000 m leaves 67.6% of the db as negatives — measured, so no retune is warranted.
+	mineParams = {  'positiveLocationThreshold': int(_os.environ.get('CL_POS_LOC', 20)),
+	                'positiveYawThreshold': int(_os.environ.get('CL_POS_YAW', 15)),
+	                'negativeLocationMinThreshold': int(_os.environ.get('CL_NEG_LOC', 2000)),
+	                'negativeYawThreshold': (int(_os.environ['CL_NEG_YAW']) if _os.environ.get('CL_NEG_YAW') else None),
+	                'margin': 0.2,
+	                'numberOfNegatives': 5,
+	                'negativeSampleAttempts': 2,
+	                'numberOfSampledNegatives': 4000,
+	                'reusingNegatives': True,
+	                'trainMiningStrategy': MiningStrategy.SEMIHARD_AND_HARD_NEGATIVE,
+				# queryExtractFeatsInterval is spec'd per triplet but only divided by batchSize, so a
+				# reusage of 3 refreshes 3x more often unless CL_EXTRACT_INTERVAL is scaled with it.
+				'numberOfTrainTripletReusages': int(_os.environ.get('CL_REUSE', 1)) }
+
+	# yawThreshold replaces the bare 30 literal at the Evaluator calls below
+	evalParams = {	'recallNumbers' : [1, 10, 100],
+				  	'locationThresholds': [20, 50, 100, 200, 1000],
+				  	# Evaluator indexes locationThresholds into range(step, max+1, step), so every
+				  	# threshold must be a multiple of the step -- 50 is not a multiple of 20.
+				  	'locationThresholdStep': 10,
+				  	'successfulLocalizationThreshold': 50,
+				  	'yawThreshold': 30 }
+
+	# Sparse db (query positions x 12 azimuths), as the released Swiss training set is; the
+	# uniform compact db is 13x larger and is for evaluation only (CROSSLOCATE_PLAN.md sec 6).
+	datasetParams = datasetFarfieldTrainSparseDepth
+
+else:
+	raise ValueError('Unknown trainingConfig: {}'.format(trainingConfig))
+
+_bad = [t for t in evalParams['locationThresholds'] if (t % evalParams['locationThresholdStep'] != 0)]
+if (_bad):
+	raise ValueError('locationThresholds {} are not multiples of locationThresholdStep {} — '
+					 'Evaluator.__getValueAtThreshold will raise "not in list" after the first '
+					 'descriptor extraction'.format(_bad, evalParams['locationThresholdStep']))
 
 learnParams = {	'optimizer': 'Adam',
 				'learningRate': 0.00001,
 			   	'learningRateDownscaleEpochs': [],
 			   	'learningRateDownscaleFactors': [] }
 
-mineParams = {  'positiveLocationThreshold': 20,
-                'positiveYawThreshold': 15,
-                'negativeLocationMinThreshold': 2000,
-                'margin': 0.2,
-                'numberOfNegatives': 10,
-                'negativeSampleAttempts': 2,
-                'numberOfSampledNegatives': 4000,
-                'reusingNegatives': True,
-                'trainMiningStrategy': MiningStrategy.SEMIHARD_AND_HARD_NEGATIVE,
-				'numberOfTrainTripletReusages': 1 }
-
 augmentParams = {   'augmentation': True }
-
-evalParams = {	'recallNumbers' : [1, 10, 100],
-			  	'locationThresholds': [20, 100, 1000],
-			  	'locationThresholdStep': 20,
-			  	'successfulLocalizationThreshold': 20 }
 
 plotParams = { 'distanceRecallsXTicks': [0, 20, 100, 250, 500, 750, 1000] }
 
-visualParams = { 'batchVisualEpochs': [trainParams['startEpoch'], trainParams['endEpoch']],
+# batchVisualLimit: the released code visualises EVERY batch of these epochs — 3207 batches x 21
+# images cost 3.0 GB and ~2.7 s/batch, 6x the 0.43 s training step itself. The first few batches
+# carry all the sanity-check value.
+# The val triplet loss only feeds plotValEpochLoss - nothing else reads valEpochLossHistory - and a
+# per-split val db cannot supply the 4000 sampled negatives the loss is defined over.
+valLossEnabled = _os.environ.get('CL_VAL_LOSS', '0') == '1'
+
+visualParams = { 'batchVisualLimit': 20,
+				 'batchVisualEpochs': [trainParams['startEpoch'], trainParams['endEpoch']],
 				 'successesVisualEpochs': [trainParams['endEpoch']],
 				 'failsVisualEpochs': [trainParams['endEpoch']] }
 
@@ -93,8 +178,6 @@ outputDirectories = {	'charts': 'charts',
 						'history': 'history',
 						'models': 'models',
 					 	'visuals': 'visuals' }
-
-datasetParams = datasetSegments
 
 
 # Reproducibility
@@ -122,23 +205,29 @@ historyPath = os.path.join(fullOutputPath, outputDirectories['history'])
 modelsPath = os.path.join(fullOutputPath, outputDirectories['models'])
 visualsPath = os.path.join(fullOutputPath, outputDirectories['visuals'])
 
-os.mkdir(chartsPath)
-os.mkdir(descriptorsPath)
-os.mkdir(evaluationsPath)
-if (trainParams['startEpoch'] == 1):
-	os.mkdir(historyPath)
-	os.mkdir(modelsPath)
-os.mkdir(visualsPath)
+# exist_ok so a CL_START_EPOCH resume does not die on directories its first run created
+os.makedirs(chartsPath, exist_ok=True)
+os.makedirs(descriptorsPath, exist_ok=True)
+os.makedirs(evaluationsPath, exist_ok=True)
+os.makedirs(historyPath, exist_ok=True)
+os.makedirs(modelsPath, exist_ok=True)
+os.makedirs(visualsPath, exist_ok=True)
 
 
 # GPU selection
 from core.Environment import Environment
 print('----- GPU -----')
 
-gpuID = Environment.seizeGPU()
-if (gpuID == -1):
-    print('[{}] No GPU, exit'.format(tag))
-    exit(1)
+# seizeGPU() demands a GPU with NO processes at all, which a workstation running Xorg on the
+# card can never satisfy (Xorg is a type-G process, not a compute one). CL_GPU names the device.
+if (_os.environ.get('CL_GPU') is not None):
+	gpuID = _os.environ['CL_GPU']
+	_os.environ['CUDA_VISIBLE_DEVICES'] = gpuID
+else:
+	gpuID = Environment.seizeGPU()
+	if (gpuID == -1):
+		print('[{}] No GPU, exit'.format(tag))
+		exit(1)
 print('[{}] Seized GPU: {}'.format(tag, gpuID))
 
 print('')
@@ -157,9 +246,13 @@ print('----- Config -----')
 # Do not allocate all of the memory
 
 config = tf.ConfigProto()
-config.gpu_options.allow_growth = True	# TODO: check
+# allow_growth and per_process_gpu_memory_fraction are mutually exclusive in TF1: growth
+# wins and the fraction is ignored, so BFC grabs the whole card and starves a second run.
+config.gpu_options.allow_growth = (float(_os.environ.get('CL_GPU_FRACTION', 1.0)) >= 1.0)
 
-gpu_memory_usage = 1.0					# TODO: check
+# CL_GPU_FRACTION caps this process so two runs share one card (the model needs 8.6 GB fp32 /
+# 6.8 GB AMP, measured, so 24 GB holds two).
+gpu_memory_usage = float(_os.environ.get('CL_GPU_FRACTION', 1.0))
 config.gpu_options.per_process_gpu_memory_fraction = gpu_memory_usage	# TODO: check
 
 print('')
@@ -193,17 +286,18 @@ if (techParams['moveToSSD']):
 	databasePath, queriesPath = Environment.moveDataset([databasePath, queriesPath], experimentSSDPath)
 	print('')
 
-trainDataset = Dataset(datasetParams['name'], datasetParams['meta'], 'train', databasePath, queriesPath, positiveLocationThreshold=mineParams['positiveLocationThreshold'], positiveYawThreshold=mineParams['positiveYawThreshold'], negativeLocationMinThreshold=mineParams['negativeLocationMinThreshold'])
+trainDataset = Dataset(datasetParams['name'], datasetParams['meta'], 'train', databasePath, queriesPath, positiveLocationThreshold=mineParams['positiveLocationThreshold'], positiveYawThreshold=mineParams['positiveYawThreshold'], negativeLocationMinThreshold=mineParams['negativeLocationMinThreshold'], negativeYawThreshold=mineParams.get('negativeYawThreshold'))
 trainDataset.loadFromMetaStructs()
-trainDataset.precomputeLocationDistancesWGS()
+# UTM for farfield (small basin, WGS great-circle overkill); released path keeps its WGS behaviour
+trainDataset.precomputeLocationDistancesUTM() if (trainingConfig == 'farfield') else trainDataset.precomputeLocationDistancesWGS()
 trainDataset.findPositiveDbIDs()
 trainDataset.findNonNegativeDbIDs()
 
 print('')
 
-valDataset = Dataset(datasetParams['name'], datasetParams['meta'], 'val', databasePath, queriesPath, positiveLocationThreshold=mineParams['positiveLocationThreshold'], positiveYawThreshold=mineParams['positiveYawThreshold'], negativeLocationMinThreshold=mineParams['negativeLocationMinThreshold'])
+valDataset = Dataset(datasetParams['name'], datasetParams['meta'], 'val', databasePath, queriesPath, positiveLocationThreshold=mineParams['positiveLocationThreshold'], positiveYawThreshold=mineParams['positiveYawThreshold'], negativeLocationMinThreshold=mineParams['negativeLocationMinThreshold'], negativeYawThreshold=mineParams.get('negativeYawThreshold'))
 valDataset.loadFromMetaStructs()
-valDataset.precomputeLocationDistancesWGS()
+valDataset.precomputeLocationDistancesUTM() if (trainingConfig == 'farfield') else valDataset.precomputeLocationDistancesWGS()
 valDataset.findPositiveDbIDs()
 valDataset.findNonNegativeDbIDs()
 
@@ -333,8 +427,8 @@ from core.TripletVisualizer import TripletVisualizer
 from core.TripletVisualizer import VisualMode
 
 # Evaluators
-trainEvaluator = Evaluator(trainDataset, evalParams['recallNumbers'], evalParams['locationThresholds'], evalParams['locationThresholdStep'], yawThreshold=30, successfulLocalizationThreshold=evalParams['successfulLocalizationThreshold'], outputPath=evaluationsPath)
-valEvaluator = Evaluator(valDataset, evalParams['recallNumbers'], evalParams['locationThresholds'], evalParams['locationThresholdStep'], yawThreshold=30, successfulLocalizationThreshold=evalParams['successfulLocalizationThreshold'], outputPath=evaluationsPath)
+trainEvaluator = Evaluator(trainDataset, evalParams['recallNumbers'], evalParams['locationThresholds'], evalParams['locationThresholdStep'], yawThreshold=evalParams['yawThreshold'], successfulLocalizationThreshold=evalParams['successfulLocalizationThreshold'], outputPath=evaluationsPath)
+valEvaluator = Evaluator(valDataset, evalParams['recallNumbers'], evalParams['locationThresholds'], evalParams['locationThresholdStep'], yawThreshold=evalParams['yawThreshold'], successfulLocalizationThreshold=evalParams['successfulLocalizationThreshold'], outputPath=evaluationsPath)
 
 # Historian
 historian = Historian(evalParams['recallNumbers'], evalParams['locationThresholds'], historyPath)
@@ -363,7 +457,8 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 
 	sess.run(initializer)								# TODO: check (but network seems to be pretrained)
 
-	saver = tf.train.Saver(max_to_keep=2)
+	# 100 epochs of val recall are only useful if the epoch that peaked is still on disk
+	saver = tf.train.Saver(max_to_keep=trainParams['endEpoch'] if (trainingConfig == 'farfield') else 2)
 
 	if (trainParams['startEpoch'] == 1):
 		if (netParams['pretrained'] == 'IMAGENET'):
@@ -389,9 +484,16 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 					print('Loaded ImageNet weights for {} {}'.format(netParams['branching'].name, netParams['architecture'].name))
 
 		elif (netParams['pretrained']):
-			pretrainedModelsPath = os.path.join('output', netParams['pretrained'], outputDirectories['models'])
-			saver.restore(sess, tf.train.latest_checkpoint(pretrainedModelsPath))
-			print('Loaded latest model from', pretrainedModelsPath)
+			if (os.sep in netParams['pretrained']):
+				# Explicit checkpoint prefix: trainables only, since released checkpoints have no Adam slots
+				with graph.as_default():
+					warmSaver = tf.train.Saver(var_list=tf.trainable_variables())
+				warmSaver.restore(sess, netParams['pretrained'])
+				print('Warm-started from checkpoint', netParams['pretrained'])
+			else:
+				pretrainedModelsPath = os.path.join('output', netParams['pretrained'], outputDirectories['models'])
+				saver.restore(sess, tf.train.latest_checkpoint(pretrainedModelsPath))
+				print('Loaded latest model from', pretrainedModelsPath)
 
 	else:
 		# Load graph and latest model
@@ -400,8 +502,12 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		saver.restore(sess, tf.train.latest_checkpoint(modelsPath))
 		print('Restored latest model from', modelsPath)
 
-		# Load history
-		historian.load()
+		# An epoch that crashed before historian.write() leaves nothing to load; the weights still
+		# resume, the recall history just restarts at startEpoch.
+		if (os.path.exists(os.path.join(historyPath, 'trainEpochLossHistory.npy'))):
+			historian.load()
+		else:
+			print('No history to load - resuming with an empty history')
 
 	fileWriter = tf.summary.FileWriter(os.path.join('tensorboard', experimentName), sess.graph)	# TODO: check
 
@@ -453,7 +559,8 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 	valPositionDistanceRecalls, valPositionAndOrientationDistanceRecalls, valPositionRecalls, valPositionAndOrientationRecalls, _, _ = valEvaluator.computeRecallsAtNs(withPrint=True)
 	print('')
 
-	# Store initial evaluation results only for new training
+	# Only the per-epoch recall series must not be appended twice on a resume; the chance and
+	# distance recalls overwrite dataset-level constants, so they are stored either way.
 	if (trainParams['startEpoch'] == 1):
 		# Recalls
 		historian.addTrainPositionRecalls(trainPositionRecalls)
@@ -461,29 +568,32 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		historian.addTrainPositionAndOrientationRecalls(trainPositionAndOrientationRecalls)
 		historian.addValPositionAndOrientationRecalls(valPositionAndOrientationRecalls)
 
-		# Chance recalls
-		historian.storeTrainChancePositionRecalls(trainChancePositionRecalls)
-		historian.storeValChancePositionRecalls(valChancePositionRecalls)
-		historian.storeTrainChancePositionAndOrientationRecalls(trainChancePositionAndOrientationRecalls)
-		historian.storeValChancePositionAndOrientationRecalls(valChancePositionAndOrientationRecalls)
+	# Chance recalls
+	historian.storeTrainChancePositionRecalls(trainChancePositionRecalls)
+	historian.storeValChancePositionRecalls(valChancePositionRecalls)
+	historian.storeTrainChancePositionAndOrientationRecalls(trainChancePositionAndOrientationRecalls)
+	historian.storeValChancePositionAndOrientationRecalls(valChancePositionAndOrientationRecalls)
 
-		# Distance recalls
-		historian.storeTrainPositionDistanceRecalls(trainPositionDistanceRecalls)
-		historian.storeValPositionDistanceRecalls(valPositionDistanceRecalls)
-		historian.storeTrainPositionAndOrientationDistanceRecalls(trainPositionAndOrientationDistanceRecalls)
-		historian.storeValPositionAndOrientationDistanceRecalls(valPositionAndOrientationDistanceRecalls)
+	# Distance recalls
+	historian.storeTrainPositionDistanceRecalls(trainPositionDistanceRecalls)
+	historian.storeValPositionDistanceRecalls(valPositionDistanceRecalls)
+	historian.storeTrainPositionAndOrientationDistanceRecalls(trainPositionAndOrientationDistanceRecalls)
+	historian.storeValPositionAndOrientationDistanceRecalls(valPositionAndOrientationDistanceRecalls)
 
-		# Chance distance recalls
-		historian.storeTrainChancePositionDistanceRecalls(trainChancePositionDistanceRecalls)
-		historian.storeValChancePositionDistanceRecalls(valChancePositionDistanceRecalls)
-		historian.storeTrainChancePositionAndOrientationDistanceRecalls(trainChancePositionAndOrientationDistanceRecalls)
-		historian.storeValChancePositionAndOrientationDistanceRecalls(valChancePositionAndOrientationDistanceRecalls)
+	# Chance distance recalls
+	historian.storeTrainChancePositionDistanceRecalls(trainChancePositionDistanceRecalls)
+	historian.storeValChancePositionDistanceRecalls(valChancePositionDistanceRecalls)
+	historian.storeTrainChancePositionAndOrientationDistanceRecalls(trainChancePositionAndOrientationDistanceRecalls)
+	historian.storeValChancePositionAndOrientationDistanceRecalls(valChancePositionAndOrientationDistanceRecalls)
 
-	plotter.plotRecalls(RecallType.POS, historian.getTrainPositionRecallsHistory(True), historian.getValPositionRecallsHistory(True), historian.getTrainChancePositionRecalls(), historian.getValChancePositionRecalls())
-	plotter.plotRecalls(RecallType.POS_AND_ORIENT, historian.getTrainPositionAndOrientationRecallsHistory(True), historian.getValPositionAndOrientationRecallsHistory(True), historian.getTrainChancePositionAndOrientationRecalls(), historian.getValChancePositionAndOrientationRecalls())
+	# Resuming a run whose first epoch died before historian.write() leaves nothing to plot yet.
+	trainRecallsHistory = historian.getTrainPositionRecallsHistory()
+	if (any(len(trainRecallsHistory[threshold]) for threshold in trainRecallsHistory)):
+		plotter.plotRecalls(RecallType.POS, historian.getTrainPositionRecallsHistory(True), historian.getValPositionRecallsHistory(True), historian.getTrainChancePositionRecalls(), historian.getValChancePositionRecalls())
+		plotter.plotRecalls(RecallType.POS_AND_ORIENT, historian.getTrainPositionAndOrientationRecallsHistory(True), historian.getValPositionAndOrientationRecallsHistory(True), historian.getTrainChancePositionAndOrientationRecalls(), historian.getValChancePositionAndOrientationRecalls())
 
-	plotter.plotDistanceRecalls(RecallType.POS, historian.getTrainPositionDistanceRecalls(), historian.getValPositionDistanceRecalls(), historian.getTrainChancePositionDistanceRecalls(), historian.getValChancePositionDistanceRecalls())
-	plotter.plotDistanceRecalls(RecallType.POS_AND_ORIENT, historian.getTrainPositionAndOrientationDistanceRecalls(), historian.getValPositionAndOrientationDistanceRecalls(), historian.getTrainChancePositionAndOrientationDistanceRecalls(), historian.getValChancePositionAndOrientationDistanceRecalls())
+		plotter.plotDistanceRecalls(RecallType.POS, historian.getTrainPositionDistanceRecalls(), historian.getValPositionDistanceRecalls(), historian.getTrainChancePositionDistanceRecalls(), historian.getValChancePositionDistanceRecalls())
+		plotter.plotDistanceRecalls(RecallType.POS_AND_ORIENT, historian.getTrainPositionAndOrientationDistanceRecalls(), historian.getValPositionAndOrientationDistanceRecalls(), historian.getTrainChancePositionAndOrientationDistanceRecalls(), historian.getValChancePositionAndOrientationDistanceRecalls())
 
 
 
@@ -494,6 +604,10 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 
 	print('Train on {} samples, validate on {} samples (queries)'.format(len(trainDataset), len(valDataset)))
 	print('')
+
+	sharedDatabase = (list(trainDataset.getDatabaseImageFns()) == list(valDataset.getDatabaseImageFns()))
+	if (sharedDatabase):
+		print('[{}] train and val share one database — extracting its descriptors once per epoch'.format(tag))
 
 	numberOfTrainBatches = len(trainingGenerator)
 	numberOfValBatches = len(validationGenerator)
@@ -524,8 +638,8 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		if (epoch in visualParams['batchVisualEpochs']):
 			trainBatchVisualDirName = 'train_batch_epoch{}'.format(epoch)
 			valBatchVisualDirName = 'val_batch_epoch{}'.format(epoch)
-			os.mkdir(os.path.join(visualsPath, trainBatchVisualDirName))
-			os.mkdir(os.path.join(visualsPath, valBatchVisualDirName))
+			os.makedirs(os.path.join(visualsPath, trainBatchVisualDirName), exist_ok=True)
+			os.makedirs(os.path.join(visualsPath, valBatchVisualDirName), exist_ok=True)
 
 
 
@@ -538,6 +652,8 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		trainSummary = tf.summary.scalar('train_batch_loss_epoch{}'.format(epoch), trainLoss)	# TODO: check
 
 		trainLossAcc = 0
+
+		queryRefreshWindowEnd = None
 
 		for batch in range(1, numberOfTrainBatches+1):
 			print('Processing training batch {} out of {}'.format(batch, numberOfTrainBatches))
@@ -562,7 +678,7 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 				print('')
 				break
 
-			if (epoch in visualParams['batchVisualEpochs']):
+			if (epoch in visualParams['batchVisualEpochs']) and (batch <= visualParams['batchVisualLimit']):
 				if (netParams['branching'] is Branching.ONE_BRANCH):
 					imageBatch = tripletBatch
 				elif (netParams['branching'] is Branching.TWO_BRANCH):
@@ -577,9 +693,18 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 				print('----- Intermediate descriptor extraction -----')
 				print('')
 
-				trainDbDescriptors, trainQDescriptors = None, None
+				# Mining reads one query descriptor per triplet, so only the queries drawn before the
+				# next refresh are ever used; 3x nominal covers the triplets mining skips.
+				if (queryRefreshWindowEnd is not None) and (trainingGenerator.tripletIndex > queryRefreshWindowEnd):
+					print('[WARN] query refresh window exceeded by {} triplets - stale descriptors were mined'.format(
+						trainingGenerator.tripletIndex - queryRefreshWindowEnd))
 
-				trainDbDescriptors, trainQDescriptors = trainingDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
+				queryRefreshWindow = 3 * batchExtractFeatsInterval * trainParams['batchSize']
+				upcomingQueryIDs = trainingGenerator.upcomingQueryIDs(queryRefreshWindow)
+				queryRefreshWindowEnd = trainingGenerator.tripletIndex + queryRefreshWindow
+
+				trainDbDescriptors, trainQDescriptors = trainingDescriptorExtractor.extractDatasetDescriptorsPartialQueries(
+					sess, dbModel=dbModel, qModel=qModel, queryIDs=upcomingQueryIDs, qDescriptors=trainQDescriptors)
 
 				trainingGenerator.setDescriptors(trainDbDescriptors, trainQDescriptors)
 
@@ -609,7 +734,12 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		valDbDescriptors, valQDescriptors = None, None
 
 		trainDbDescriptors, trainQDescriptors = trainingDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
-		valDbDescriptors, valQDescriptors = validationDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
+		if (sharedDatabase):
+			# Only when db_per_split is off; otherwise val has its own db and takes the else branch.
+			valQDescriptors = validationDescriptorExtractor.extractQueryDescriptors(sess, qModel=qModel)
+			valDbDescriptors = trainDbDescriptors
+		else:
+			valDbDescriptors, valQDescriptors = validationDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
 
 		trainingGenerator.setDescriptors(trainDbDescriptors, trainQDescriptors)
 		validationGenerator.setDescriptors(valDbDescriptors, valQDescriptors)
@@ -627,8 +757,9 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		valSummary = tf.summary.scalar('val_batch_loss_epoch{}'.format(epoch), trainLoss)
 
 		valLossAcc = 0
+		batch = 0
 
-		for batch in range(1, numberOfValBatches+1):
+		for batch in range(1, (numberOfValBatches+1) if valLossEnabled else 1):
 			print('Processing validation batch {} out of {}'.format(batch, numberOfValBatches))
 
 			tripletBatch, _ = validationGenerator.getBatch()				# TODO: batch index
@@ -651,7 +782,7 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 				print('')
 				break
 
-			if (epoch in visualParams['batchVisualEpochs']):
+			if (epoch in visualParams['batchVisualEpochs']) and (batch <= visualParams['batchVisualLimit']):
 				if (netParams['branching'] is Branching.ONE_BRANCH):
 					imageBatch = tripletBatch
 				elif (netParams['branching'] is Branching.TWO_BRANCH):
@@ -663,7 +794,7 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 
 			print('')
 
-		valEpochLoss = valLossAcc / batch			# TODO: check
+		valEpochLoss = (valLossAcc / batch) if batch else float('nan')
 		valEpochLossSummary = tf.Summary(value=[ tf.Summary.Value(tag='val_epoch_loss', simple_value=valEpochLoss) ])
 		historian.addValEpochLoss(valEpochLoss)
 		fileWriter.add_summary(valEpochLossSummary, epoch)

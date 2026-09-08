@@ -54,7 +54,8 @@ class MasterEnvironment:
             print('[{}] Scikit-learn:\t{}'.format(MasterEnvironment.tag, sklearn.__version__))
 
         print('')
-        print('[{}] Available GPUs:\t{}'.format(MasterEnvironment.tag, tf.test.gpu_device_name()))
+        gpus = tf.config.experimental.list_physical_devices('GPU')   # does not allocate
+        print('[{}] Available GPUs:\t{}'.format(MasterEnvironment.tag, [g.name for g in gpus]))
 
     @staticmethod
     def moveDataset(srcDatasetPartPaths, dstPath, dstSubdirName='dataset'):

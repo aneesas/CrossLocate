@@ -1,0 +1,33 @@
+# CrossLocate evaluation environment (uv, Python 3.8)
+#   uv venv --python 3.8 .venv
+#   uv pip install --python .venv/bin/python \
+#       --index-strategy unsafe-best-match --extra-index-url https://pypi.nvidia.com \
+#       -r requirements.txt
+#
+# Deviations from the README's pins, and why:
+#   TensorFlow 1.14.0 -> nvidia-tensorflow 1.15.5+nv22.12
+#       Stock TF 1.14/1.15 is built against CUDA 10 and has no sm_86 kernels, so it
+#       cannot run on an RTX 3090. NVIDIA's TF1 fork is rebuilt against CUDA 11.8.
+#       Only cp36/cp38 wheels exist, hence Python 3.8 rather than the README's 3.6.
+#   NumPy 1.16.0 -> 1.23.5
+#       Lower bound: the nvidia-tensorflow wheel is compiled against the numpy 1.20+
+#       C ABI (import fails with "module compiled against API version 0xe" below that).
+#       Upper bound: numpy 1.24 removed np.object, which TF 1.15 still references.
+#   pymap3d 1.8.1 (unpinned in the README)
+#       Dataset.computeDistancesWGS unpacks three values from vdist(); pymap3d 2.x
+#       returns two. 1.8.x keeps the three-value API the code was written against.
+#   OpenEXR (unpinned in the README) - v3 bindings still expose the legacy
+#       OpenEXR.InputFile / Imath API that TensorAssembler uses.
+#
+# README-specified versions kept exactly: OpenCV 4.4.0, Imageio 2.5.0, Scikit-learn 0.24.1.
+
+nvidia-tensorflow==1.15.5+nv22.12
+numpy==1.23.5
+opencv-python==4.4.0.46
+imageio==2.5.0
+scikit-learn==0.24.1
+h5py==2.10.0
+matplotlib==3.3.4
+scipy==1.10.1
+pymap3d==1.8.1
+OpenEXR

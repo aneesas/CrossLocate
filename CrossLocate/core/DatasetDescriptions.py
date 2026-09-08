@@ -105,6 +105,55 @@ datasetOriginalToDepthSwiss = { 'name': 'Sparse',
 								'queries': 'query_original_result',
 								'meta': 'GeoPose3K_v2_original_to_depth_swiss' }
 
+datasetFarfieldCharlesDepth = { 'name': 'FarfieldCharles',
+								'database': 'database_depth',
+								'queries': 'query_original',
+								'meta': 'farfield_charles_depth' }
+
+datasetFarfieldHarborDepth = { 'name': 'FarfieldHarbor',
+							   'database': 'database_depth',
+							   'queries': 'query_original',
+							   'meta': 'farfield_harbor_depth' }
+
+datasetFarfieldCharlesVoidDepth = { 'name': 'FarfieldCharlesVoid',
+									'database': 'database_depth',
+									'queries': 'query_original',
+									'meta': 'farfield_charles_void_depth' }
+
+datasetFarfieldHarborVoidDepth = { 'name': 'FarfieldHarborVoid',
+								   'database': 'database_depth',
+								   'queries': 'query_original',
+								   'meta': 'farfield_harbor_void_depth' }
+
+datasetFarfieldCharlesEye32Depth = { 'name': 'FarfieldCharlesEye32',
+									 'database': 'database_depth',
+									 'queries': 'query_original',
+									 'meta': 'farfield_charles_eye32_depth' }
+
+datasetFarfieldHarborEye40Depth = { 'name': 'FarfieldHarborEye40',
+									'database': 'database_depth',
+									'queries': 'query_original',
+									'meta': 'farfield_harbor_eye40_depth' }
+
+# Training dataset (spans both Charles + Harbor); name/meta from farfield's
+# config/params_crosslocate.yaml crosslocate_params.
+datasetFarfieldTrainSparseDepth = { 'name': 'FarfieldTrainSparse',
+								'database': 'database_depth',
+								'queries': 'query_original',
+								'meta': 'farfield_train_sparse_depth' }
+
+datasetFarfieldTrainDepth = { 'name': 'FarfieldTrain',
+							  'database': 'database_depth',
+							  'queries': 'query_original',
+							  'meta': 'farfield_train_depth' }
+
+# Same queries as FarfieldTrain, but the db grid spans the whole AOI (no query-proximity
+# filter): 41484 pos x 12 = 497808 views vs the compact db's 225228.
+datasetFarfieldTrainFullDepth = { 'name': 'FarfieldTrainFull',
+								  'database': 'database_depth',
+								  'queries': 'query_original',
+								  'meta': 'farfield_train_full_depth' }
+
 
 datasetSegmentsResolution = {	'name': 'Sparse',
 				   				'database': 'database_segments',

@@ -119,6 +119,10 @@ class TripletGenerator():
 	def __getLastNegativeDbIDs(self, queryID):
 		return self.lastNegativeDbIDs[queryID]
 
+	def upcomingQueryIDs(self, count):
+		"""Query IDs the next count draws will mine; an upper bound, reusage consumes fewer."""
+		return self.queryIndexes[self.tripletIndex : self.tripletIndex + count]
+
 	def getBatch(self):
 		inputBatch, targetBatch = self.__generateTripletBatch()
 		return inputBatch, targetBatch
