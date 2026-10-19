@@ -41,6 +41,8 @@ class TensorAssembler():
         self.queriesPath = queriesPath
 
         self.dimensions = dimensions
+        # dimensions is (height, width); cv2.resize takes (width, height).
+        self.resizeDimensions = (dimensions[1], dimensions[0])
         self.channels = channels
 
         self.databaseTensorFormat = databaseTensorFormat
@@ -66,7 +68,7 @@ class TensorAssembler():
 
         if (self.queryTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName == 'GeoPose3K_v2_depth'):
             queryImage = self.__loadExr(os.path.join(self.queriesPath, queryFn))
-            querySample = cv2.resize(queryImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            querySample = cv2.resize(queryImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             queryTensor[:, :, 0] = querySample
             queryTensor[:, :, 1] = querySample
@@ -74,13 +76,13 @@ class TensorAssembler():
 
         elif (self.queryTensorFormat is TensorFormat.INPUT_RGB):
             queryImage = io.imread(os.path.join(self.queriesPath, queryFn), pilmode='RGB')
-            querySample = cv2.resize(queryImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            querySample = cv2.resize(queryImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             queryTensor = querySample
 
         elif (self.queryTensorFormat is TensorFormat.INPUT_GRAY_INPUT_GRAY_INPUT_GRAY):
             queryImage = io.imread(os.path.join(self.queriesPath, queryFn), pilmode='RGB', as_gray=True)
-            querySample = cv2.resize(queryImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            querySample = cv2.resize(queryImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             queryTensor[:, :, 0] = querySample  # R
             queryTensor[:, :, 1] = querySample  # G
@@ -88,10 +90,10 @@ class TensorAssembler():
 
         # elif (self.queryTensorFormat is TensorFormat.ORIG_GRAY_INPUT_GRAY_INPUT_GRAY):
         #     queryImage = io.imread(os.path.join(self.queriesPath, queryFn), pilmode='RGB', as_gray=True)
-        #     querySample = cv2.resize(queryImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+        #     querySample = cv2.resize(queryImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
         #
         #     origImage = io.imread(os.path.join(self.originalQueriesPath, queryFn), pilmode='RGB', as_gray=True)
-        #     origSample = cv2.resize(origImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+        #     origSample = cv2.resize(origImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
         #
         #     queryTensor[:, :, 0] = origSample   # R
         #     queryTensor[:, :, 1] = querySample  # G
@@ -99,13 +101,13 @@ class TensorAssembler():
 
         elif (self.queryTensorFormat is TensorFormat.INPUT_GRAY_DEPTH_1CH_SILH_1CH):
             queryImage = io.imread(os.path.join(self.queriesPath, queryFn), pilmode='RGB', as_gray=True)
-            querySample = cv2.resize(queryImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            querySample = cv2.resize(queryImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             depthImage = self.__loadExr(os.path.join(self.depthQueriesPath, queryFn[:-4]+'.exr'))
-            depthSample = cv2.resize(depthImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            depthSample = cv2.resize(depthImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             silhouetteImage = io.imread(os.path.join(self.silhouetteQueriesPath, queryFn[:-4]+'.png'))                          # assuming 1-channel uint8 silhouettes (loaded as such)
-            silhouetteSample = cv2.resize(silhouetteImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            silhouetteSample = cv2.resize(silhouetteImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             queryTensor[:, :, 0] = querySample
             queryTensor[:, :, 1] = depthSample
@@ -119,9 +121,9 @@ class TensorAssembler():
     def getDatabaseTensor(self, databaseFn):
         databaseTensor = np.ndarray(shape=(*self.dimensions, self.channels), dtype=np.float32)
 
-        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth']):
+        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth', 'farfield_graded_depth', 'farfield_uniform_charles_depth', 'farfield_uniform_charles_eye32_depth', 'farfield_uniform_harbor_depth', 'farfield_uniform_harbor_eye40_depth']):
             databaseImage = self.__loadExr(os.path.join(self.databasePath, databaseFn))
-            databaseSample = cv2.resize(databaseImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            databaseSample = cv2.resize(databaseImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             databaseTensor[:, :, 0] = databaseSample
             databaseTensor[:, :, 1] = databaseSample
@@ -129,13 +131,13 @@ class TensorAssembler():
 
         elif (self.databaseTensorFormat is TensorFormat.INPUT_RGB):
             databaseImage = io.imread(os.path.join(self.databasePath, databaseFn), pilmode='RGB')
-            databaseSample = cv2.resize(databaseImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            databaseSample = cv2.resize(databaseImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             databaseTensor = databaseSample
 
         elif (self.databaseTensorFormat is TensorFormat.INPUT_GRAY_INPUT_GRAY_INPUT_GRAY):
             databaseImage = io.imread(os.path.join(self.databasePath, databaseFn), pilmode='RGB', as_gray=True)
-            databaseSample = cv2.resize(databaseImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            databaseSample = cv2.resize(databaseImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             databaseTensor[:, :, 0] = databaseSample  # R
             databaseTensor[:, :, 1] = databaseSample  # G
@@ -143,13 +145,13 @@ class TensorAssembler():
 
         elif (self.databaseTensorFormat is TensorFormat.INPUT_GRAY_DEPTH_1CH_SILH_1CH):
             databaseImage = io.imread(os.path.join(self.databasePath, databaseFn), pilmode='RGB', as_gray=True)
-            databaseSample = cv2.resize(databaseImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            databaseSample = cv2.resize(databaseImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             depthImage = self.__loadExr(os.path.join(self.depthDatabasePath, '_'.join(databaseFn.split('_')[:-1])+'_depth.exr'))
-            depthSample = cv2.resize(depthImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            depthSample = cv2.resize(depthImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             silhouetteImage = io.imread(os.path.join(self.silhouetteDatabasePath, '_'.join(databaseFn.split('_')[:-1])+'_silhouettes.png'))     # assuming 1-channel uint8 silhouettes (loaded as such)
-            silhouetteSample = cv2.resize(silhouetteImage, dsize=self.dimensions, interpolation=cv2.INTER_AREA)
+            silhouetteSample = cv2.resize(silhouetteImage, dsize=self.resizeDimensions, interpolation=cv2.INTER_AREA)
 
             databaseTensor[:, :, 0] = databaseSample
             databaseTensor[:, :, 1] = depthSample

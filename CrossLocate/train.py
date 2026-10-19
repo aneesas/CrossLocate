@@ -36,7 +36,7 @@ from core.DatasetDescriptions import datasetAlpsCH1ToDepth, datasetAlpsCH1ToDept
 from core.DatasetDescriptions import datasetAlpsCH2ToSegments, datasetAlpsCH2ToSegmentsResolution, datasetAlpsCH2ToSegmentsExt, datasetAlpsCH2ToSegmentsExtResolution
 from core.DatasetDescriptions import datasetAlpsCH2ToSilhouettes, datasetAlpsCH2ToSilhouettesExt
 from core.DatasetDescriptions import datasetAlpsCH2ToDepth, datasetAlpsCH2ToDepthResolution, datasetAlpsCH2ToDepthExt, datasetAlpsCH2ToDepthExtResolution
-from core.DatasetDescriptions import datasetFarfieldTrainDepth, datasetFarfieldTrainSparseDepth
+from core.DatasetDescriptions import datasetFarfieldTrainDepth, datasetFarfieldTrainSparseDepth, datasetFarfieldGradedDepth
 from core.NetworkBuilder import Branching, Metric
 from networks.NeuralNetwork import Architecture, Pooling, FeatureNormalization
 from core.TensorAssembler import TensorFormat
@@ -76,6 +76,9 @@ if (trainingConfig == 'released'):
 	                'trainMiningStrategy': MiningStrategy.SEMIHARD_AND_HARD_NEGATIVE,
 					'numberOfTrainTripletReusages': 1 }
 
+	# 'released' config keeps the original scalar-margin, descriptor-mining behavior untouched.
+	bankParams = { 'adaptiveMargin': False, 'useBands': False }
+
 	evalParams = {	'recallNumbers' : [1, 10, 100],
 				  	'locationThresholds': [20, 100, 1000],
 				  	'locationThresholdStep': 20,
@@ -86,7 +89,10 @@ if (trainingConfig == 'released'):
 
 elif (trainingConfig == 'farfield'):
 	# inputDimensions per sec 1c depth hyperparameters (VGG16/MAC/L2-L2/ONE_BRANCH already match released)
-	netParams = { 	'inputDimensions': (500, 500),
+	# (height, width). Non-square is fine: VGG16 is all SAME padding and MAC pools over both
+	# spatial axes, so only the input placeholder and the resize target change.
+	netParams = { 	'inputDimensions': (int(_os.environ.get('CL_INPUT_H', 500)),
+									    int(_os.environ.get('CL_INPUT_W', 500))),
 				 	'branching': Branching.ONE_BRANCH,
 				 	'architecture': Architecture.VGG16,
 				 	'preFeatNorm': FeatureNormalization.L2,
@@ -99,7 +105,7 @@ elif (trainingConfig == 'farfield'):
 					# CL_END_EPOCH lets a run be extended later without editing this file; resuming
 					# with CL_START_EPOCH restores the latest checkpoint and the history.
 					'endEpoch': int(_os.environ.get('CL_END_EPOCH', 30)),
-					'batchSize': 3,
+					'batchSize': int(_os.environ.get('CL_BATCH', 3)),
 					'margin': 0.1,
 					# Supplementary specifies this PER TRIPLET: 250 (Sparse) / 1000 (Uniform). Our query
 					# set is 6.8x theirs, so a faithful 250 costs 39 db passes/epoch (4.2 h). 1000 is
@@ -118,14 +124,30 @@ elif (trainingConfig == 'farfield'):
 	                'negativeLocationMinThreshold': int(_os.environ.get('CL_NEG_LOC', 2000)),
 	                'negativeYawThreshold': (int(_os.environ['CL_NEG_YAW']) if _os.environ.get('CL_NEG_YAW') else None),
 	                'margin': 0.2,
-	                'numberOfNegatives': 5,
+	                # 8 = 1 positive + band budget 2/4/2 (bankParams['negativesPerBand']).
+	                'numberOfNegatives': 8,
 	                'negativeSampleAttempts': 2,
 	                'numberOfSampledNegatives': 4000,
 	                'reusingNegatives': True,
-	                'trainMiningStrategy': MiningStrategy.SEMIHARD_AND_HARD_NEGATIVE,
+	                'trainMiningStrategy': (MiningStrategy.SIMILARITY_BANDS
+	                                        if (_os.environ.get('CL_ADAPTIVE_MARGIN', '1') == '1')
+	                                        else MiningStrategy.SEMIHARD_AND_HARD_NEGATIVE),
 				# queryExtractFeatsInterval is spec'd per triplet but only divided by batchSize, so a
 				# reusage of 3 refreshes 3x more often unless CL_EXTRACT_INTERVAL is scaled with it.
 				'numberOfTrainTripletReusages': int(_os.environ.get('CL_REUSE', 1)) }
+
+	# useBands defaults with adaptiveMargin: bank-supplied negatives make descriptor-based mining moot.
+	bankParams = { 'adaptiveMargin': _os.environ.get('CL_ADAPTIVE_MARGIN', '1') == '1',
+				   # 0.27 puts the median bank margin (0.368 at alpha 1) on trainParams margin 0.1, so the
+				   # first graded run differs from the fixed-margin baseline in shape only, not strength.
+				   'alpha': float(_os.environ.get('CL_MARGIN_ALPHA', 0.27)),
+				   'bankPath': _os.environ.get('CL_BANK_PATH', '/home/aneesa/results/render_matching/2026-09-11_similarity_labels_bank'),
+				   'positiveFloor': float(_os.environ.get('CL_POS_FLOOR', 0.50)),
+				   'bandEdges': [0.35, 0.18],
+				   'negativesPerBand': [2, 4, 2],
+				   # margins now come from warp cells (see TripletGenerator), so the bank path needs them loaded
+				   'loadWarps': _os.environ.get('CL_BANK_LOAD_WARPS', '1') == '1' }
+	bankParams['useBands'] = bankParams['adaptiveMargin']
 
 	# yawThreshold replaces the bare 30 literal at the Evaluator calls below
 	evalParams = {	'recallNumbers' : [1, 10, 100],
@@ -136,9 +158,11 @@ elif (trainingConfig == 'farfield'):
 				  	'successfulLocalizationThreshold': 50,
 				  	'yawThreshold': 30 }
 
-	# Sparse db (query positions x 12 azimuths), as the released Swiss training set is; the
-	# uniform compact db is 13x larger and is for evaluation only (CROSSLOCATE_PLAN.md sec 6).
-	datasetParams = datasetFarfieldTrainSparseDepth
+	# The graded set is the bank's own grid, so band selection needs it whenever useBands is on.
+	# Otherwise uses the sparse dataset, which is only useful for rapid training and not for anything you
+	# want to run real evaluation experiments on.
+	datasetParams = (datasetFarfieldGradedDepth if (bankParams['useBands'])
+					 else datasetFarfieldTrainSparseDepth)
 
 else:
 	raise ValueError('Unknown trainingConfig: {}'.format(trainingConfig))
@@ -212,6 +236,42 @@ os.makedirs(evaluationsPath, exist_ok=True)
 os.makedirs(historyPath, exist_ok=True)
 os.makedirs(modelsPath, exist_ok=True)
 os.makedirs(visualsPath, exist_ok=True)
+
+
+# Nothing else records what a run was: every knob is an env var and train.py is uncommitted, so a
+# checkpoint on its own cannot say which alpha, bank or dataset produced it. One file per launch.
+def _snapshotParams(outputPath):
+	import json, sys, subprocess
+	from datetime import datetime
+
+	def _git(repo):
+		try:
+			sha = subprocess.check_output(['git', '-C', repo, 'rev-parse', 'HEAD'], stderr=subprocess.STDOUT)
+			status = subprocess.check_output(['git', '-C', repo, 'status', '--porcelain'], stderr=subprocess.STDOUT)
+			return { 'commit': sha.decode().strip(), 'dirty': bool(status.decode().strip()) }
+		except Exception as error:
+			return { 'error': str(error) }
+
+	# isinstance(dict) also keeps this function, whose own name ends in Params, out of its dump
+	snapshot = dict((name, value) for (name, value) in globals().items()
+					if name.endswith('Params') and isinstance(value, dict))
+	snapshot['experimentName'] = experimentName
+	snapshot['trainingConfig'] = trainingConfig
+	snapshot['startedAt'] = datetime.now().isoformat()
+	snapshot['argv'] = sys.argv
+	# only CL_* is ours; the rest of the environment is noise and may hold credentials
+	snapshot['env'] = dict((k, v) for (k, v) in _os.environ.items() if k.startswith('CL_'))
+	snapshot['git'] = { 'crosslocate': _git(os.path.dirname(os.path.abspath(__file__))),
+						'farfield': _git('/home/aneesa/src/farfield') }
+
+	stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+	fn = os.path.join(outputPath, 'params_{}.json'.format(stamp))
+	with open(fn, 'w') as f:
+		# default=str keeps enums (Pooling.MAC) and tuples from killing the dump
+		json.dump(snapshot, f, indent=2, sort_keys=True, default=str)
+	print('[{}] wrote run parameters to {}'.format(tag, fn))
+
+_snapshotParams(fullOutputPath)
 
 
 # GPU selection
@@ -349,7 +409,7 @@ print('----- Network -----')
 
 networkBuilder = NetworkBuilder(netParams['inputDimensions'], trainParams['batchSize'], mineParams['numberOfNegatives'], trainParams['metric'], learnParams['optimizer'])
 
-graph, model, trainLoss, learningRate, optimizer, initializer = networkBuilder.build(netParams['branching'], netParams['architecture'], netParams['preFeatNorm'], netParams['pooling'], netParams['postFeatNorm'], trainParams['margin'])
+graph, model, trainLoss, learningRate, optimizer, initializer, marginInput = networkBuilder.build(netParams['branching'], netParams['architecture'], netParams['preFeatNorm'], netParams['pooling'], netParams['postFeatNorm'], trainParams['margin'], adaptiveMargin=bankParams['adaptiveMargin'])
 
 if (netParams['branching'] is Branching.ONE_BRANCH):
 	dbModel = model
@@ -412,8 +472,24 @@ generatorParams = {	'branching': netParams['branching'],
 				   	'numberOfSampledNegatives': mineParams['numberOfSampledNegatives'],
                     'reusingNegatives': mineParams['reusingNegatives']}
 
-trainingGenerator = TripletGenerator(trainDataset, tensorAssembler, dbAugmentator, qAugmentator, **generatorParams, numberOfTripletReusages=mineParams['numberOfTrainTripletReusages'], miningStrategy=mineParams['trainMiningStrategy'], shuffle=True)
-validationGenerator = TripletGenerator(valDataset, tensorAssembler, None, None, **generatorParams, numberOfTripletReusages=1, miningStrategy=MiningStrategy.NONE, shuffle=False)
+# One bank per Dataset: the c/q resolution is against that split's own dbIDs/qIDs.
+if (bankParams['useBands']):
+	from core.SimilarityBank import SimilarityBank
+	trainBank = SimilarityBank(bankParams['bankPath'], trainDataset.dbIDs, trainDataset.qIDs,
+							   bankParams['positiveFloor'], bankParams['bandEdges'],
+							   loadWarps=bankParams['loadWarps'], tag='SimilarityBank (train)')
+	# The val generator only runs under CL_VAL_LOSS, but its margins must come from the same
+	# bands or the adaptive graph would be fed a fixed-margin batch.
+	valBank = SimilarityBank(bankParams['bankPath'], valDataset.dbIDs, valDataset.qIDs,
+							 bankParams['positiveFloor'], bankParams['bandEdges'],
+							 loadWarps=bankParams['loadWarps'], tag='SimilarityBank (val)') if valLossEnabled else None
+else:
+	trainBank = valBank = None
+
+valMiningStrategy = MiningStrategy.SIMILARITY_BANDS if (valBank is not None) else MiningStrategy.NONE
+
+trainingGenerator = TripletGenerator(trainDataset, tensorAssembler, dbAugmentator, qAugmentator, **generatorParams, numberOfTripletReusages=mineParams['numberOfTrainTripletReusages'], miningStrategy=mineParams['trainMiningStrategy'], shuffle=True, similarityBank=trainBank, bankParams=bankParams)
+validationGenerator = TripletGenerator(valDataset, tensorAssembler, None, None, **generatorParams, numberOfTripletReusages=1, miningStrategy=valMiningStrategy, shuffle=False, similarityBank=valBank, bankParams=bankParams)
 
 print('')
 
@@ -518,11 +594,22 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 	print('----- Initial descriptor extraction -----')
 	print('')
 
+	# Defined here, not at the epoch loop: the initial extraction below has to honour it too, or
+	# a shared database is walked twice (274k renders, ~20 min) before epoch 1 for nothing.
+	sharedDatabase = (list(trainDataset.getDatabaseImageFns()) == list(valDataset.getDatabaseImageFns()))
+	if (sharedDatabase):
+		print('[{}] train and val share one database — extracting its descriptors once per pass'.format(tag))
+
 	trainDbDescriptors, trainQDescriptors = trainingDescriptorExtractor.loadDatasetDescriptors()
 	if (trainDbDescriptors is None) or (trainQDescriptors is None):
 		print('')
 		print('Precomputing training descriptors ...')
-		trainDbDescriptors, trainQDescriptors = trainingDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
+		# A seeded db cache (same weights, same renders) saves a ~38 min pass; the query side is
+		# under a minute, so extract only the side that is actually missing.
+		if (trainDbDescriptors is not None):
+			trainQDescriptors = trainingDescriptorExtractor.extractQueryDescriptors(sess, qModel=qModel)
+		else:
+			trainDbDescriptors, trainQDescriptors = trainingDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
 
 	print('')
 
@@ -530,7 +617,11 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 	if (valDbDescriptors is None) or (valQDescriptors is None):
 		print('')
 		print('Precomputing validation descriptors ...')
-		valDbDescriptors, valQDescriptors = validationDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
+		if (sharedDatabase):
+			valQDescriptors = validationDescriptorExtractor.extractQueryDescriptors(sess, qModel=qModel)
+			valDbDescriptors = trainDbDescriptors
+		else:
+			valDbDescriptors, valQDescriptors = validationDescriptorExtractor.extractDatasetDescriptors(sess, dbModel=dbModel, qModel=qModel)
 
 	trainingGenerator.setDescriptors(trainDbDescriptors, trainQDescriptors)
 	validationGenerator.setDescriptors(valDbDescriptors, valQDescriptors)
@@ -605,10 +696,6 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 	print('Train on {} samples, validate on {} samples (queries)'.format(len(trainDataset), len(valDataset)))
 	print('')
 
-	sharedDatabase = (list(trainDataset.getDatabaseImageFns()) == list(valDataset.getDatabaseImageFns()))
-	if (sharedDatabase):
-		print('[{}] train and val share one database — extracting its descriptors once per epoch'.format(tag))
-
 	numberOfTrainBatches = len(trainingGenerator)
 	numberOfValBatches = len(validationGenerator)
 
@@ -658,7 +745,7 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		for batch in range(1, numberOfTrainBatches+1):
 			print('Processing training batch {} out of {}'.format(batch, numberOfTrainBatches))
 
-			tripletBatch, _ = trainingGenerator.getBatch()					# TODO: batch index
+			tripletBatch, marginBatch = trainingGenerator.getBatch()		# TODO: batch index
 
 			if (tripletBatch is not None):
 				if (netParams['branching'] is Branching.ONE_BRANCH):
@@ -666,6 +753,11 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 				elif (netParams['branching'] is Branching.TWO_BRANCH):
 					qBatch, dbBatch = tripletBatch
 					feedDict = {qModel.input: qBatch, dbModel.input: dbBatch, learningRate: currentLearningRate}
+
+				if (marginInput is not None):
+					if (marginBatch is None):
+						raise RuntimeError('adaptiveMargin is set but trainingGenerator.getBatch() returned no marginBatch')
+					feedDict[marginInput] = marginBatch
 
 				_, trainBatchLoss, summary = sess.run([optimizer, trainLoss, trainSummary], feed_dict=feedDict)	# TODO: check
 				print('Train (batch) loss:', trainBatchLoss)
@@ -688,7 +780,8 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 				tripletYawDistancesBatch = trainingGenerator.getYawDistancesBatch()
 				batchVisualizer.visualizeBatch(imageBatch, tripletFnsBatch, tripletLocDistancesBatch, tripletYawDistancesBatch, trainBatchVisualDirName, batch)
 
-			if (batch % batchExtractFeatsInterval == 0):
+			# Descriptor-based mining is unused when the bank supplies negatives (band mining); skip the refresh.
+			if (not bankParams['useBands']) and (batch % batchExtractFeatsInterval == 0):
 				print('')
 				print('----- Intermediate descriptor extraction -----')
 				print('')
@@ -762,7 +855,7 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 		for batch in range(1, (numberOfValBatches+1) if valLossEnabled else 1):
 			print('Processing validation batch {} out of {}'.format(batch, numberOfValBatches))
 
-			tripletBatch, _ = validationGenerator.getBatch()				# TODO: batch index
+			tripletBatch, marginBatch = validationGenerator.getBatch()		# TODO: batch index
 
 			if (tripletBatch is not None):
 				if (netParams['branching'] is Branching.ONE_BRANCH):
@@ -770,6 +863,11 @@ with tf.Session(graph=graph, config=config) as sess:	# TODO: check
 				elif (netParams['branching'] is Branching.TWO_BRANCH):
 					qBatch, dbBatch = tripletBatch
 					feedDict = {qModel.input: qBatch, dbModel.input: dbBatch}
+
+				if (marginInput is not None):
+					if (marginBatch is None):
+						raise RuntimeError('adaptiveMargin is set but validationGenerator.getBatch() returned no marginBatch')
+					feedDict[marginInput] = marginBatch
 
 				valBatchLoss, summary = sess.run([trainLoss, valSummary], feed_dict=feedDict)
 				print('Val (batch) loss', valBatchLoss)

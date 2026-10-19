@@ -7,12 +7,18 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', required=True,
                     choices=['segments', 'depth', 'farfield_charles', 'farfield_harbor', 'farfield_charles_void', 'farfield_harbor_void',
                              'farfield_charles_eye32', 'farfield_harbor_eye40', 'farfield_train',
-                             'farfield_train_full'])
+                             'farfield_train_full', 'farfield_graded',
+                             'farfield_uniform_charles', 'farfield_uniform_charles_eye32',
+                             'farfield_uniform_harbor', 'farfield_uniform_harbor_eye40'])
 parser.add_argument('--checkpoint', required=True)
 parser.add_argument('--outputPath', required=True)
 parser.add_argument('--set', default='test')
 parser.add_argument('--inputSize', type=int, default=500)   # released models were trained at 500x500
+parser.add_argument('--inputHeight', type=int)   # overrides --inputSize; use with --inputWidth for non-square
+parser.add_argument('--inputWidth', type=int)
 parser.add_argument('--locationThresholds', default='20,100,1000',
+                    type=lambda s: [int(v) for v in s.split(',')])
+parser.add_argument('--recallNumbers', default='1,10,100',   # ascending; the last sets n_neighbors
                     type=lambda s: [int(v) for v in s.split(',')])
 parser.add_argument('--locationThresholdStep', type=int, default=10)  # every locationThreshold must be a multiple of it
 parser.add_argument('--successfulLocalizationThreshold', type=int, default=20)
@@ -32,7 +38,9 @@ from core.DatasetDescriptions import (datasetOriginalToSegmentsSwiss, datasetOri
                                       datasetFarfieldCharlesDepth, datasetFarfieldHarborDepth,
     datasetFarfieldCharlesVoidDepth, datasetFarfieldHarborVoidDepth,
     datasetFarfieldCharlesEye32Depth, datasetFarfieldHarborEye40Depth,
-    datasetFarfieldTrainDepth, datasetFarfieldTrainFullDepth)
+    datasetFarfieldTrainDepth, datasetFarfieldTrainFullDepth, datasetFarfieldGradedDepth,
+    datasetFarfieldUniformCharlesDepth, datasetFarfieldUniformCharlesEye32Depth,
+    datasetFarfieldUniformHarborDepth, datasetFarfieldUniformHarborEye40Depth)
 from core.Dataset import Dataset
 from core.TensorAssembler import TensorAssembler, TensorFormat
 from core.NetworkBuilder import NetworkBuilder, Branching, Metric
@@ -49,9 +57,14 @@ datasetParams = {'segments': datasetOriginalToSegmentsSwiss,
                  'farfield_charles_eye32': datasetFarfieldCharlesEye32Depth,
                  'farfield_harbor_eye40': datasetFarfieldHarborEye40Depth,
                  'farfield_train': datasetFarfieldTrainDepth,
-                 'farfield_train_full': datasetFarfieldTrainFullDepth}[args.dataset]
+                 'farfield_train_full': datasetFarfieldTrainFullDepth,
+                 'farfield_graded': datasetFarfieldGradedDepth,
+                 'farfield_uniform_charles': datasetFarfieldUniformCharlesDepth,
+                 'farfield_uniform_charles_eye32': datasetFarfieldUniformCharlesEye32Depth,
+                 'farfield_uniform_harbor': datasetFarfieldUniformHarborDepth,
+                 'farfield_uniform_harbor_eye40': datasetFarfieldUniformHarborEye40Depth}[args.dataset]
 
-netParams = {'inputDimensions': (args.inputSize, args.inputSize),
+netParams = {'inputDimensions': (args.inputHeight or args.inputSize, args.inputWidth or args.inputSize),
              'branching': Branching.ONE_BRANCH,
              'architecture': Architecture.VGG16,
              'preFeatNorm': FeatureNormalization.L2,
@@ -62,7 +75,7 @@ _bad = [t for t in args.locationThresholds if (t % args.locationThresholdStep !=
 if _bad:
     sys.exit('locationThresholds %s are not multiples of --locationThresholdStep %d' % (_bad, args.locationThresholdStep))
 
-evalParams = {'recallNumbers': [1, 10, 100],
+evalParams = {'recallNumbers': args.recallNumbers,
               'locationThresholds': args.locationThresholds,
               'locationThresholdStep': args.locationThresholdStep,
               'successfulLocalizationThreshold': args.successfulLocalizationThreshold,
@@ -93,7 +106,7 @@ tensorAssembler = TensorAssembler(datasetParams['meta'], databasePath, queriesPa
 
 print('----- Network -----')
 networkBuilder = NetworkBuilder(netParams['inputDimensions'], 3, 5, Metric.EUCLIDEAN, 'Adam')
-graph, model, _, _, _, initializer = networkBuilder.build(
+graph, model, _, _, _, initializer, _ = networkBuilder.build(
     netParams['branching'], netParams['architecture'],
     netParams['preFeatNorm'], netParams['pooling'], netParams['postFeatNorm'], 0.1)
 
@@ -118,7 +131,13 @@ with tf.Session(graph=graph, config=config) as sess:
         dbDescriptors, qDescriptors = None, None
     else:
         dbDescriptors, qDescriptors = extractor.loadDatasetDescriptors()
-    if (dbDescriptors is None) or (qDescriptors is None):
+    if (dbDescriptors is not None) and (len(dbDescriptors) != len(dataset.getDatabaseImageFns())):
+        sys.exit('cached db descriptors have %d rows, dataset has %d — delete %s'
+                 % (len(dbDescriptors), len(dataset.getDatabaseImageFns()), descriptorsPath))
+    if (dbDescriptors is not None) and (qDescriptors is None):
+        # db already in hand (sets sharing one db copy it across); extract queries only
+        qDescriptors = extractor.extractQueryDescriptors(sess, qModel=model)
+    elif (dbDescriptors is None) or (qDescriptors is None):
         dbDescriptors, qDescriptors = extractor.extractDatasetDescriptors(sess, dbModel=model, qModel=model)
 
 print('----- Recalls -----')

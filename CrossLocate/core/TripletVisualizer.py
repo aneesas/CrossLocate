@@ -170,7 +170,7 @@ class TripletVisualizer():
             raise Exception('Unsupported query TensorFormat!')
 
         # Database tensor format check
-        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth']):
+        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth', 'farfield_graded_depth']):
             dbInnerGridDim = 2
         elif (self.databaseTensorFormat is TensorFormat.INPUT_RGB):
             dbInnerGridDim = 1
@@ -312,7 +312,7 @@ class TripletVisualizer():
                 borderStyled = True
                 borderColor = 'lime'
 
-        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth']):
+        if (self.databaseTensorFormat is TensorFormat.INPUT_RGB) and (self.datasetName in ['GeoPose3K_v2_depth', 'GeoPose3K_v2_original_to_depth_swiss', 'Alps_photos_to_depth_compact', 'Alps_CH1_to_depth', 'Alps_CH2_to_depth_ext', 'farfield_charles_depth', 'farfield_harbor_depth', 'farfield_charles_void_depth', 'farfield_harbor_void_depth', 'farfield_charles_eye32_depth', 'farfield_harbor_eye40_depth', 'farfield_train_depth', 'farfield_train_sparse_depth', 'farfield_train_full_depth', 'farfield_graded_depth']):
             self.__visualizeImage(figure, databaseInnerGrid[0], databaseImage[:, :, 0])
             self.__visualizeImage(figure, databaseInnerGrid[1], databaseImage[:, :, 1], title=title)
             self.__visualizeImage(figure, databaseInnerGrid[2], databaseImage[:, :, 2])

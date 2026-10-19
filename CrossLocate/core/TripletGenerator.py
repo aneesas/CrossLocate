@@ -22,6 +22,7 @@ class MiningStrategy(Enum):
 	NONE = 0
 	SEMIHARD_AND_HARD_NEGATIVE = 1
 	SEMIHARD_NEGATIVE = 2
+	SIMILARITY_BANDS = 3
 
 
 class TripletGenerator():
@@ -36,7 +37,7 @@ class TripletGenerator():
 
 	def __init__(self, dataset, tensorAssembler, dbAugmentator, qAugmentator, branching, batchSize, dimensions, channels, margin, numberOfNegatives,
 				 negativeSampleAttempts, numberOfSampledNegatives, reusingNegatives, numberOfTripletReusages, miningStrategy,
-				 shuffle):
+				 shuffle, similarityBank=None, bankParams=None):
 		self.tag = 'TripletGenerator ({})'.format(dataset.getSet())
 
 		self.dataset = dataset
@@ -64,6 +65,24 @@ class TripletGenerator():
 		self.numberOfTripletReusages = numberOfTripletReusages
 		self.miningStrategy = miningStrategy
 
+		self.similarityBank = similarityBank
+		self.bankParams = bankParams
+		if (self.miningStrategy is MiningStrategy.SIMILARITY_BANDS):
+			if (self.similarityBank is None) or (self.bankParams is None):
+				raise ValueError('MiningStrategy.SIMILARITY_BANDS requires both similarityBank and bankParams')
+
+			self.bankAlpha = self.bankParams['alpha']
+			self.bankNegativesPerBand = self.bankParams['negativesPerBand']
+			self.bankPositiveFloor = self.bankParams['positiveFloor']
+			self.bankWarps = self.similarityBank.warps()	# cached: query/candidate warp lists + draw weights
+
+			if (sum(self.bankNegativesPerBand) != numberOfNegatives):
+				raise ValueError('bankParams.negativesPerBand sums to {} but numberOfNegatives is {}'.format(
+					sum(self.bankNegativesPerBand), numberOfNegatives))
+
+			self.bankSkipQueryIDs = set(self.similarityBank.queriesWithoutBand([1] + list(self.bankNegativesPerBand)))
+			print('[{}] {} queries skipped (cannot fill positive/band counts)'.format(self.tag, len(self.bankSkipQueryIDs)))
+
 		self.shuffle = shuffle  # shuffle sample order (even within batches)
 
 		self.numberOfTriplets = len(self.dataset)
@@ -76,6 +95,10 @@ class TripletGenerator():
 
 		self.numberOfPositivesNotFound = 0
 		self.numberOfNegativesNotFound = 0
+		self.numberOfBandShortfalls = [0, 0, 0]
+		self.numberOfMarginClamps = 0
+		self.numberOfBankSkips = 0
+		self.numberOfWarpFallbacks = 0
 
 		self.nnAlgorithm = 'ball_tree'
 		self.nnMetric = 'euclidean'
@@ -94,6 +117,10 @@ class TripletGenerator():
 
 		self.numberOfPositivesNotFound = 0
 		self.numberOfNegativesNotFound = 0
+		self.numberOfBandShortfalls = [0, 0, 0]
+		self.numberOfMarginClamps = 0
+		self.numberOfBankSkips = 0
+		self.numberOfWarpFallbacks = 0
 
 	# Returns the number of batches (per epoch)
 	# Keras method (equivalent to steps_per_epoch)
@@ -154,6 +181,8 @@ class TripletGenerator():
 		positiveYawDistancesBatch = []
 		negativeYawDistancesBatch = []
 
+		marginBatch = np.ndarray(shape=(0, self.numberOfNegatives), dtype=np.float32)
+
 		currentBatchSize = 0
 		while (currentBatchSize < self.batchSize):
 
@@ -162,14 +191,19 @@ class TripletGenerator():
 				print('[{}] All {} possible triplets processed'.format(self.tag, self.numberOfTriplets))
 				print('[{}] {} triplets skipped because of positive samples'.format(self.tag, self.numberOfPositivesNotFound))
 				print('[{}] {} triplets skipped because of negative samples'.format(self.tag, self.numberOfNegativesNotFound))
+				print('[{}] {} triplets skipped because query has no bank data'.format(self.tag, self.numberOfBankSkips))
+				print('[{}] band shortfalls (top/mid/low): {}'.format(self.tag, self.numberOfBandShortfalls))
+				print('[{}] {} margins clamped to 0'.format(self.tag, self.numberOfMarginClamps))
+				print('[{}] {} warp cells fell back (invalid cell or missing pair)'.format(self.tag, self.numberOfWarpFallbacks))
 				return None, None
 
 			# Get query ID for current triplet
 			queryID = self.queryIndexes[self.tripletIndex]
 
 			if (self.currentTripletReusage == 0):
-				# Get positive and negative database IDs for current triplet
-				positiveDbID, negativeDbIDs = self.__getTripletDbIDs(queryID)
+				# Get positive and negative database IDs for current triplet (selection only; bank
+				# path's margin is None here, computed below per augmentation pass instead)
+				positiveDbID, negativeDbIDs, _ = self.__getTripletDbIDs(queryID)
 
 				# Go through triplets until successful
 				if (positiveDbID is None) or (negativeDbIDs is None):
@@ -183,6 +217,18 @@ class TripletGenerator():
 				positiveDbID = self.reusePositiveDbID
 				negativeDbIDs = self.reuseNegativeDbIDs
 
+			# Bank path: warp indices and the margin are redrawn every augmentation pass (including
+			# reusages), since a margin fixed at selection time would describe the wrong warp on
+			# reusage 2..n. queryWarp/positiveWarp/negativeWarps stay None otherwise -> augmentImage
+			# falls back to its normal random augmentation, byte-identical to before this change.
+			negativeMargins = None
+			queryWarp = None
+			positiveWarp = None
+			negativeWarps = None
+			if (self.miningStrategy is MiningStrategy.SIMILARITY_BANDS):
+				negativeMargins, queryWarp, positiveWarp, negativeWarps = self.__drawWarpsAndMargins(
+					queryID, positiveDbID, negativeDbIDs)
+
 			# Create tensors for current triplet
 			queryTensor = np.ndarray(shape=(1, *self.dimensions, self.channels), dtype=np.float32)
 			positiveTensor = np.ndarray(shape=(1, *self.dimensions, self.channels), dtype=np.float32)
@@ -192,11 +238,12 @@ class TripletGenerator():
 			queryFn = self.dataset.getQueryImageFn(queryID)
 			if (self.currentTripletReusage == 0):
 				queryTensor[0] = self.tensorAssembler.getQueryTensor(queryFn)
-				self.reuseQueryTensor = queryTensor[0]
+				# .copy(): the row is augmented in place below, so a view would make reusages compound
+				self.reuseQueryTensor = queryTensor[0].copy()
 			else:
 				queryTensor[0] = self.reuseQueryTensor
 			if (self.qAugmentator):
-				queryTensor[0] = self.qAugmentator.augmentImage(queryTensor[0])
+				queryTensor[0] = self.qAugmentator.augmentImage(queryTensor[0], warp=queryWarp)
 				isFlipped = self.qAugmentator.wasFlipped()
 
 			queryFnsBatch.append(queryFn)
@@ -207,11 +254,11 @@ class TripletGenerator():
 			positiveFn = self.dataset.getDatabaseImageFn(positiveDbID[0])
 			if (self.currentTripletReusage == 0):
 				positiveTensor[0] = self.tensorAssembler.getDatabaseTensor(positiveFn)
-				self.reusePositiveTensor = positiveTensor[0]
+				self.reusePositiveTensor = positiveTensor[0].copy()
 			else:
 				positiveTensor[0] = self.reusePositiveTensor
 			if (self.dbAugmentator):
-				positiveTensor[0] = self.dbAugmentator.augmentImage(positiveTensor[0], applyFlip=isFlipped, disableFlip=(not isFlipped))
+				positiveTensor[0] = self.dbAugmentator.augmentImage(positiveTensor[0], applyFlip=isFlipped, disableFlip=(not isFlipped), warp=positiveWarp)
 
 			positiveFnsBatch.append(positiveFn)
 			positiveLocDistancesBatch += self.dataset.computeLocationDistances(queryID, positiveDbID, squared=False).tolist()
@@ -228,9 +275,14 @@ class TripletGenerator():
 			negativeYawDistancesBatch += self.dataset.computeYawDistances(queryID, negativeDbIDs, inDegrees=True)
 
 			if (self.currentTripletReusage == 0):
-				self.reuseNegativeTensor = negativeTensor
+				self.reuseNegativeTensor = negativeTensor.copy()
 			else:
-				negativeTensor = self.reuseNegativeTensor
+				negativeTensor[:] = self.reuseNegativeTensor
+
+			# Build this triplet's margin row (bank path only), padding to match negativeTensor duplication below
+			if (negativeMargins is not None):
+				marginRow = np.zeros(shape=(self.numberOfNegatives,), dtype=np.float32)
+				marginRow[0:len(negativeMargins)] = negativeMargins
 
 			# Add remaining negatives by duplicating existing ones
 			if (len(negativeDbIDs) < self.numberOfNegatives):
@@ -238,14 +290,24 @@ class TripletGenerator():
 				for sampleIndex, remainingIndex in enumerate(range(remainingStartIndex, self.numberOfNegatives)):
 					moduloSampleIndex = sampleIndex % remainingStartIndex
 					negativeTensor[remainingIndex] = negativeTensor[moduloSampleIndex]
+					if (negativeMargins is not None):
+						marginRow[remainingIndex] = marginRow[moduloSampleIndex]
+					if (negativeWarps is not None):
+						# same warp as the copied image, so augmentImage reproduces it and the
+						# duplicated margin (from the same source index, above) stays correct
+						negativeWarps.append(negativeWarps[moduloSampleIndex])
 
 					negativeFnsBatch.append('repeat')
 					negativeLocDistancesBatch += [None]
 					negativeYawDistancesBatch += [None]
 
+			if (negativeMargins is not None):
+				marginBatch = np.concatenate((marginBatch, marginRow.reshape(1, -1)))
+
 			if (self.dbAugmentator):
 				for negIndex in range(len(negativeTensor)):
-					negativeTensor[negIndex] = self.dbAugmentator.augmentImage(negativeTensor[negIndex], applyFlip=isFlipped, disableFlip=(not isFlipped))
+					thisWarp = negativeWarps[negIndex] if (negativeWarps is not None) else None
+					negativeTensor[negIndex] = self.dbAugmentator.augmentImage(negativeTensor[negIndex], applyFlip=isFlipped, disableFlip=(not isFlipped), warp=thisWarp)
 
 			# Add current tensors to (sub)batches
 			queryBatch = np.concatenate((queryBatch, queryTensor))
@@ -269,17 +331,21 @@ class TripletGenerator():
 		self.tripletLocDistancesBatch = queryLocDistancesBatch + positiveLocDistancesBatch + negativeLocDistancesBatch
 		self.tripletYawDistancesBatch = queryYawDistancesBatch + positiveYawDistancesBatch + negativeYawDistancesBatch
 
+		if (self.miningStrategy is MiningStrategy.SIMILARITY_BANDS):
+			return tripletBatch, marginBatch
 		return tripletBatch, None
 
-	# TODO: remove manual losses
 	def __getTripletDbIDs(self, queryID):
+		if (self.miningStrategy is MiningStrategy.SIMILARITY_BANDS):
+			return self.__getTripletDbIDsFromBank(queryID)
+
 		# Get positive database IDs (by location and yaw distance)
 		potentialPositiveDbIDs = self.dataset.getPositiveDbIDs(queryID=queryID)
 
 		if not potentialPositiveDbIDs:
 			print('[{}] No potential positive database IDs (return)'.format(self.tag))
 			self.numberOfPositivesNotFound += 1
-			return None, None
+			return None, None, None
 
 		# Collect violating negative database IDs across multiple sample attempts
 		totalViolatingNegativeDbIDs = []
@@ -311,21 +377,11 @@ class TripletGenerator():
 				# Keep only negative database IDs with descriptor distances less than positive distance + margin
 				violatingNegativeDbIDs = [negativeDbID for negativeDbID, negativeDist in zip(negativeDbIDs, negDistances)
 								if (negativeDist < posDistance[0]+self.margin)]
-
-				# --------------- TODO: remove ------------------
-				violatingNegativeDistances = [negativeDist for negativeDist in negDistances
-								if (negativeDist < posDistance[0]+self.margin)]
-				# -----------------------------------------------
 			elif (self.miningStrategy is MiningStrategy.SEMIHARD_NEGATIVE):
 				violatingNegativeDbIDs = [negativeDbID for negativeDbID, negativeDist in zip(negativeDbIDs, negDistances)
 										  if ((negativeDist < posDistance[0]+self.margin) and (negativeDist >= posDistance[0]))]
-
-				violatingNegativeDistances = [negativeDist for negativeDist in negDistances
-										  if ((negativeDist < posDistance[0]+self.margin) and (negativeDist >= posDistance[0]))]		# TODO: remove
 			elif (self.miningStrategy is MiningStrategy.NONE):
 				violatingNegativeDbIDs = negativeDbIDs
-
-				violatingNegativeDistances = negDistances		# TODO: remove
 
 			self.dataset._Dataset__addUnique(totalViolatingNegativeDbIDs, violatingNegativeDbIDs)
 			negativeSampleAttempt += 1
@@ -337,34 +393,107 @@ class TripletGenerator():
 		if (numberOfViolatingNegatives == 0):
 			print('[{}] No violating negative database IDs (return)'.format(self.tag))
 			self.numberOfNegativesNotFound += 1
-			return None, None
-
-		# --------------- TODO: remove ------------------
-		loss = 0
-		for negativeDist in negDistances:
-		    value = posDistance[0] + self.margin - negativeDist
-		    loss += max(value, 0)
-		print('[{}] Manual loss ({} negatives):'.format(self.tag, len(negDistances)), loss)
-		# -----------------------------------------------
+			return None, None, None
 
 		# Keep max numberOfNegatives violating negative database IDs
 		if (numberOfViolatingNegatives > self.numberOfNegatives):
 			violatingNegativeDbIDs = violatingNegativeDbIDs[0:self.numberOfNegatives]
-			
-			# TODO: not required
-			violatingNegativeDistances = violatingNegativeDistances[0:self.numberOfNegatives]
-
-		# --------------- TODO: remove ------------------
-		loss = 0
-		for negativeDist in violatingNegativeDistances:
-		    value = posDistance[0] + self.margin - negativeDist
-		    loss += max(value, 0)
-		print('[{}] Manual loss ({} violating negatives):'.format(self.tag, len(violatingNegativeDistances)), loss)
-		# -----------------------------------------------
 
 		self.__updateLastNegativeDbIDs(queryID, violatingNegativeDbIDs)
 
-		return positiveDbID, violatingNegativeDbIDs
+		return positiveDbID, violatingNegativeDbIDs, None
+
+	def __getTripletDbIDsFromBank(self, queryID):
+		if (queryID in self.bankSkipQueryIDs):
+			self.numberOfBankSkips += 1
+			return None, None, None
+
+		posDbIDs, posScores = self.similarityBank.positivePool(queryID)
+		sampleIndex = np.random.randint(len(posDbIDs))
+		positiveDbID = np.array([posDbIDs[sampleIndex]])
+		simPos = posScores[sampleIndex]
+
+		# pools[b] = (remaining dbIDs, remaining scores) for band b, shrinking as bands are drawn from
+		pools = {b: list(self.similarityBank.negativeBand(queryID, b)[0]) for b in (0, 1, 2)}
+		poolScores = {b: list(self.similarityBank.negativeBand(queryID, b)[1]) for b in (0, 1, 2)}
+
+		def drawFrom(band, count):
+			available = len(pools[band])
+			take = min(count, available)
+			pickIndexes = np.random.choice(available, size=take, replace=False) if take else np.array([], dtype=int)
+			pickIndexes = sorted(pickIndexes, reverse=True)		# pop highest index first
+			dbIDs, scores = [], []
+			for i in pickIndexes:
+				dbIDs.append(pools[band].pop(i))
+				scores.append(poolScores[band].pop(i))
+			return dbIDs, scores
+
+		# No cross-band borrowing: a donor would silently change the score range the config asked
+		# for. A short band stays short and the shortfall counter is the alarm.
+		negativeDbIDs = []
+		negativeSimNeg = []
+		for band in (0, 1, 2):
+			wanted = self.bankNegativesPerBand[band]
+			dbIDs, scores = drawFrom(band, wanted)
+			if (len(dbIDs) < wanted):
+				self.numberOfBandShortfalls[band] += 1
+			negativeDbIDs += dbIDs
+			negativeSimNeg += scores
+
+		# Unwarped fallback scores, kept for __drawWarpsAndMargins (run per augmentation pass, not here)
+		self.reuseSimPos = simPos
+		self.reuseNegativeSimNeg = np.array(negativeSimNeg, dtype=np.float32)
+
+		return positiveDbID, negativeDbIDs, None
+
+	# Draws this pass's warp indices and looks up the matching bank score for the query and every
+	# database image, so the applied warp and the margin it grades are always the same bank cell.
+	def __drawWarpsAndMargins(self, queryID, positiveDbID, negativeDbIDs):
+		canWarp = (self.dbAugmentator is not None)		# no augmentator -> nothing to warp, use identity
+
+		if (canWarp):
+			qWarpIdx = np.random.choice(len(self.bankWarps['query_weight']), p=self.bankWarps['query_weight'])
+		else:
+			qWarpIdx = 0
+		queryWarp = tuple(self.bankWarps['query'][qWarpIdx])
+
+		def drawCandidateWarpIdx():
+			if (canWarp):
+				return np.random.choice(len(self.bankWarps['candidate_weight']), p=self.bankWarps['candidate_weight'])
+			return 0
+
+		cWarpIdxPos = drawCandidateWarpIdx()
+		warpedPosScore, positiveWarp = self.__warpAndScore(queryID, int(positiveDbID[0]), qWarpIdx, cWarpIdxPos, self.reuseSimPos)
+
+		negativeWarps = []
+		warpedNegScores = []
+		for negIndex, negativeDbID in enumerate(negativeDbIDs):
+			cWarpIdx = drawCandidateWarpIdx()
+			warpedNegScore, negativeWarp = self.__warpAndScore(queryID, int(negativeDbID), qWarpIdx, cWarpIdx, self.reuseNegativeSimNeg[negIndex])
+			negativeWarps.append(negativeWarp)
+			warpedNegScores.append(warpedNegScore)
+
+		rawMargins = self.bankAlpha * (warpedPosScore - np.array(warpedNegScores, dtype=np.float32))
+		self.numberOfMarginClamps += int(np.sum(rawMargins < 0))
+		negativeMargins = np.maximum(0.0, rawMargins).astype(np.float32)
+
+		return negativeMargins, queryWarp, positiveWarp, negativeWarps
+
+	# Same qWarpIdx row for both sides of a margin, per the whole point of this class: warp = score.
+	def __warpAndScore(self, queryID, dbID, qWarpIdx, cWarpIdx, unwarpedScore):
+		identityWarp = tuple(self.bankWarps['candidate'][0])		# bank convention: index 0 is [0,0,0]
+
+		cells = self.similarityBank.warpCells(queryID, dbID)
+		if (cells is not None):
+			scores, valid = cells
+			if valid[qWarpIdx, cWarpIdx]:
+				return float(scores[qWarpIdx, cWarpIdx]), tuple(self.bankWarps['candidate'][cWarpIdx])
+			if valid[qWarpIdx, 0]:
+				self.numberOfWarpFallbacks += 1
+				return float(scores[qWarpIdx, 0]), identityWarp
+
+		self.numberOfWarpFallbacks += 1
+		return float(unwarpedScore), identityWarp
 
 	# TODO: unite both filter function
 	def __filterPotentialPositiveDbIDs(self, potentialPositiveDbIDs, queryDesc, potentialPositiveDbDescs):

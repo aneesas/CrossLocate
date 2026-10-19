@@ -80,21 +80,24 @@ class Augmentator():
 
         self.appearanceAugmentation = True
 
-    def augmentImage(self, image, applyFlip=False, disableFlip=False):
+    def augmentImage(self, image, applyFlip=False, disableFlip=False, warp=None):
         if (self.appearanceAugmentation):
             image = image.astype(np.uint8)
 
         height, width, _ = image.shape
 
-        if ('shift' in self.augmentations):
-            if (random.random() < self.augmentations['shift']['prob']):
-                maxHorizontalShift = int(width * self.augmentations['shift']['maxHorizontalPercentage'])
-                maxVerticalShift = int(height * self.augmentations['shift']['maxVerticalPercentage'])
-                image = self.__shiftImage(image, maxHorizontalShift, maxVerticalShift)
+        if (warp is not None):
+            image = self.applyWarp(image, *warp)
+        else:
+            if ('shift' in self.augmentations):
+                if (random.random() < self.augmentations['shift']['prob']):
+                    maxHorizontalShift = int(width * self.augmentations['shift']['maxHorizontalPercentage'])
+                    maxVerticalShift = int(height * self.augmentations['shift']['maxVerticalPercentage'])
+                    image = self.__shiftImage(image, maxHorizontalShift, maxVerticalShift)
 
-        if ('rotation' in self.augmentations):
-            if (random.random() < self.augmentations['rotation']['prob']):
-                image = self.__rotateImage(image, self.augmentations['rotation']['maxAngle'])
+            if ('rotation' in self.augmentations):
+                if (random.random() < self.augmentations['rotation']['prob']):
+                    image = self.__rotateImage(image, self.augmentations['rotation']['maxAngle'])
 
         if ('flip' in self.augmentations) and (not disableFlip):
             if (random.random() < self.augmentations['flip']['prob']) or (applyFlip):
@@ -133,10 +136,21 @@ class Augmentator():
 
         return image
 
+    def applyWarp(self, image, dx, dy, roll):
+        """Applies one exact warp (bank convention): shift by round(dx*w),round(dy*h), then rotate roll degrees."""
+        height, width, _ = image.shape
+        image = self.__shiftPixels(image, round(dx * width), round(dy * height))
+        if (roll != 0):
+            image = self.__rotateByAngle(image, roll)
+        return image
+
     def __shiftImage(self, image, maxHorizontalShift, maxVerticalShift):
         xShift = random.randint(-maxHorizontalShift, maxHorizontalShift)
         yShift = random.randint(-maxVerticalShift, maxVerticalShift)
 
+        return self.__shiftPixels(image, xShift, yShift)
+
+    def __shiftPixels(self, image, xShift, yShift):
         hShiftedImage = np.zeros_like(image)
 
         if (xShift > 0):
@@ -162,6 +176,9 @@ class Augmentator():
     def __rotateImage(self, image, maxAngle):
         angle = random.randint(-maxAngle, maxAngle)
 
+        return self.__rotateByAngle(image, angle)
+
+    def __rotateByAngle(self, image, angle):
         height, width, _ = image.shape
 
         rotationMatrix = cv2.getRotationMatrix2D(center=(width/2, height/2), angle=angle, scale=1)

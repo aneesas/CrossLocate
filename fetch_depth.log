@@ -1,0 +1,14 @@
+--- meta ---
+OK   GeoPose3K_v2_original_to_depth_swiss_train.npy
+OK   GeoPose3K_v2_original_to_depth_swiss_val.npy
+OK   GeoPose3K_v2_original_to_depth_swiss_test.npy
+--- checkpoint ---
+OK   GeoImRet_origToDepthSwiss_res500_negs5_qReuse3-model-164.data-00000-of-00001
+OK   GeoImRet_origToDepthSwiss_res500_negs5_qReuse3-model-164.index
+OK   GeoImRet_origToDepthSwiss_res500_negs5_qReuse3-model-164.meta
+OK   15_1_train_origToDepthSwiss_res500_negs5_qReuse3.py
+--- database_depth (6G) ---
+OK   database_depth.tar.gz
+--- extracting ---
+OK   extract database_depth
+=== DONE ===

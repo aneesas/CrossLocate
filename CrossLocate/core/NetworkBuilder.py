@@ -44,8 +44,9 @@ class NetworkBuilder():
 
 		self.tripletSize = 1 + 1 + self.numberOfNegatives
 
-	def build(self, branching, architecture, preFeatNorm, pooling, postFeatNorm, margin):
+	def build(self, branching, architecture, preFeatNorm, pooling, postFeatNorm, margin, adaptiveMargin=False):
 		self.margin = margin
+		self.marginInput = None
 
 		print('[{}] Building {} variant of {} network with {} pooling'.format(self.tag, branching.name, architecture.name, pooling.name))
 		print('')
@@ -58,6 +59,9 @@ class NetworkBuilder():
 			if (branching is Branching.TWO_BRANCH):
 				model2 = self.__buildNetwork(2, architecture, preFeatNorm, pooling, postFeatNorm)
 				print('')
+
+			if (adaptiveMargin):
+				self.marginInput = tf.placeholder(tf.float32, shape=(self.batchSize, self.numberOfNegatives))
 
 			if (branching is Branching.ONE_BRANCH):
 				with tf.name_scope('triplet_loss'):
@@ -75,7 +79,7 @@ class NetworkBuilder():
 
 			initializer = tf.global_variables_initializer()		# an Op that initializes global variables in the graph
 
-		return graph, model, trainLoss, learningRate, optimizer, initializer
+		return graph, model, trainLoss, learningRate, optimizer, initializer, self.marginInput
 
 	def __buildNetwork(self, ID, architecture, preFeatNorm, pooling, postFeatNorm):
 		input = tf.placeholder(tf.float32, (None, *self.inputDimensions, 3))
@@ -141,7 +145,8 @@ class NetworkBuilder():
 		print('[{}] {}'.format(self.tag, negativeDists.shape))
 		print('')
 
-		loss = tf.maximum(positiveDists + self.margin - negativeDists, 0.0)
+		margin = self.margin if (self.marginInput is None) else self.marginInput		# per-(query,negative) margin overrides scalar when adaptive
+		loss = tf.maximum(positiveDists + margin - negativeDists, 0.0)
 
 		print('[{}] Loss values (max-margin)'.format(self.tag))
 		print('[{}] {}'.format(self.tag, loss.shape))

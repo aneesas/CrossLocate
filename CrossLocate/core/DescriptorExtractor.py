@@ -34,8 +34,11 @@ class DescriptorExtractor():
 
 		self.inputDimensions = inputDimensions
 
-		self.dbDescriptorsFn = dataset.getSet() + 'DbDescriptors'
-		self.qDescriptorsFn = dataset.getSet() + 'QDescriptors'
+		# Descriptors depend on the input size, so it keys the cache filename: without it a run at
+		# a new size silently reuses the old descriptors, and the row-count guard cannot see it.
+		suffix = '' if (inputDimensions is None) else '_h{}w{}'.format(*inputDimensions)
+		self.dbDescriptorsFn = dataset.getSet() + 'DbDescriptors' + suffix
+		self.qDescriptorsFn = dataset.getSet() + 'QDescriptors' + suffix
 
 		self.extractBatchSize = 10
 		# Image loading runs ~7x faster than the VGG16 forward pass, so prefetching batches off

@@ -40,7 +40,9 @@ class Evaluator():
 
 		self.outputPath = outputPath
 
-		self.nnAlgorithm = 'ball_tree'
+		# brute + one batched query beats a ball tree ~25x here: trees degenerate at 512-D and the
+		# per-row loop below defeated BLAS. Same exact neighbours (top-1/10 identical, top-100 set-identical).
+		self.nnAlgorithm = 'brute'
 		self.nnMetric = 'euclidean'
 
 	def setDescriptors(self, dbDescriptors, qDescriptors):
@@ -52,15 +54,11 @@ class Evaluator():
 		bestNN.fit(self.dbDescriptors)
 
 		# Create array with 100 nearest neighbor database IDs for each query
-		qNearestNeighbors = []
-		for qDesc in self.qDescriptors:
-			if (not chanceSolution):
-				qDescriptor = qDesc.reshape(1, -1)
-				distances, indices = bestNN.kneighbors(qDescriptor)		# [[distances]], [[indices]]
-
-				qNearestNeighbors.append(indices[0])
-			else:
-				qNearestNeighbors.append([])
+		if (chanceSolution):
+			qNearestNeighbors = [[] for _ in self.qDescriptors]
+		else:
+			distances, indices = bestNN.kneighbors(np.asarray(self.qDescriptors))
+			qNearestNeighbors = list(indices)
 
 		# Initialize recall records (both storing recalls for all location thresholds and all recall numbers)
 		positionRecalls = {locThr: [] for locThr in self.locationThresholds}						# e.g. { 20: [], 100: [], 1000: [] }

@@ -1,0 +1,20 @@
+--- meta structures ---
+OK   GeoPose3K_v2_original_to_segments_swiss_train.npy
+OK   GeoPose3K_v2_original_to_segments_swiss_val.npy
+OK   GeoPose3K_v2_original_to_segments_swiss_test.npy
+--- pretrained checkpoint ---
+OK   GeoImRet_origToSegmentsSwiss_res500_negs5_qReuse3-model-213.data-00000-of-00001
+OK   GeoImRet_origToSegmentsSwiss_res500_negs5_qReuse3-model-213.index
+OK   GeoImRet_origToSegmentsSwiss_res500_negs5_qReuse3-model-213.meta
+curl: (22) The requested URL returned error: 404
+FAIL https://cphoto.fit.vutbr.cz/crosslocate/dataset/models/original_to_segments_swiss_13_5/checkpoint
+OK   13_5_train_origToSegmentsSwiss_res500_negs5_qReuse3.py
+--- dataset tarballs ---
+OK   query_original_result.tar.gz
+OK   database_segments.tar.gz
+--- extracting ---
+extracting query_original_result
+OK   extract query_original_result
+extracting database_segments
+OK   extract database_segments
+=== DONE ===

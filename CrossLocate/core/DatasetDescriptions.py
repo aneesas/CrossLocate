@@ -135,8 +135,36 @@ datasetFarfieldHarborEye40Depth = { 'name': 'FarfieldHarborEye40',
 									'queries': 'query_original',
 									'meta': 'farfield_harbor_eye40_depth' }
 
+# Uniform (full, unbuffered) re-exports, 2026-09-11: same query sets as the *Depth datasets
+# above, but the db candidate grid drops the 1km query-proximity buffer (query_buffer_m=null)
+# and the all-water-only candidate_cells fix -- see farfield's CROSSLOCATE_PLAN.md/chat log.
+datasetFarfieldUniformCharlesDepth = { 'name': 'FarfieldUniformCharles',
+									   'database': 'database_depth',
+									   'queries': 'query_original',
+									   'meta': 'farfield_uniform_charles_depth' }
+
+datasetFarfieldUniformCharlesEye32Depth = { 'name': 'FarfieldUniformCharlesEye32',
+											'database': 'database_depth',
+											'queries': 'query_original',
+											'meta': 'farfield_uniform_charles_eye32_depth' }
+
+datasetFarfieldUniformHarborDepth = { 'name': 'FarfieldUniformHarbor',
+									  'database': 'database_depth',
+									  'queries': 'query_original',
+									  'meta': 'farfield_uniform_harbor_depth' }
+
+datasetFarfieldUniformHarborEye40Depth = { 'name': 'FarfieldUniformHarborEye40',
+										   'database': 'database_depth',
+										   'queries': 'query_original',
+										   'meta': 'farfield_uniform_harbor_eye40_depth' }
+
 # Training dataset (spans both Charles + Harbor); name/meta from farfield's
 # config/params_crosslocate.yaml crosslocate_params.
+datasetFarfieldGradedDepth = { 'name': 'FarfieldGraded',
+								'database': 'database_depth',
+								'queries': 'query_original',
+								'meta': 'farfield_graded_depth' }
+
 datasetFarfieldTrainSparseDepth = { 'name': 'FarfieldTrainSparse',
 								'database': 'database_depth',
 								'queries': 'query_original',
